@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: kotanoba
+      POSTGRES_USER: kotanoba
+      POSTGRES_PASSWORD: kotanoba
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kotanoba -d kotanoba"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nlp:
+    build:
+      context: ./nlp
+    ports:
+      - "8000:8000"
+
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nlp:
+        condition: service_started
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: kotanoba
+      DB_USER: kotanoba
+      DB_PASSWORD: kotanoba
+      NLP_SERVICE_URL: http://nlp:8000
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres-data:

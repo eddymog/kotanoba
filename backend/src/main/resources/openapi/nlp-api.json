@@ -1,0 +1,271 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Kotanoba NLP",
+    "description": "Japanese tokenization for Kotanoba. Stateless, no database.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Liveness/readiness probe",
+        "description": "Used by the Compose healthcheck and as the signal behind Resilience4j's\ncircuit breaker on the Spring side.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tokenize": {
+      "post": {
+        "summary": "Tokenize Japanese text",
+        "operationId": "tokenize",
+        "parameters": [
+          {
+            "name": "x-correlation-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "-",
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenizeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "SplitMode": {
+        "type": "string",
+        "enum": [
+          "A",
+          "B",
+          "C"
+        ],
+        "title": "SplitMode",
+        "description": "Sudachi's segmentation granularity.\n\nJapanese has no spaces, so where a word ends is a judgement call. Sudachi\nexposes that as a knob rather than making you build it:\n\n    A  東京 / 都 / 庁      finest\n    B  東京 / 都庁         middle\n    C  東京都庁            coarsest, keeps named entities whole\n\nC is the default: a learner looking up 東京都庁 wants the whole thing, not\nthree fragments they already know."
+      },
+      "Token": {
+        "properties": {
+          "surface": {
+            "type": "string",
+            "title": "Surface",
+            "description": "Text exactly as it appeared."
+          },
+          "char_start": {
+            "type": "integer",
+            "title": "Char Start",
+            "description": "Start offset into the original text, in UTF-16 code units so it indexes a Java String directly. Half-open with char_end."
+          },
+          "char_end": {
+            "type": "integer",
+            "title": "Char End",
+            "description": "End offset, exclusive."
+          },
+          "is_word": {
+            "type": "boolean",
+            "title": "Is Word",
+            "description": "False for punctuation, symbols and whitespace. Those still get a token so the reader can rebuild the document in order, but they carry no lemma."
+          },
+          "normalized_form": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Form",
+            "description": "Sudachi's normalized form — collapses script variants, so できる and 出来る land on the same value. This is what user status attaches to. Null when is_word is false."
+          },
+          "dictionary_form": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dictionary Form",
+            "description": "Uninflected form: 食べます -> 食べる. Null for non-words."
+          },
+          "reading": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reading",
+            "description": "Katakana reading as analysed *in this sentence*, which is why furigana has to come from here and not a kanji lookup table: 今日 is キョウ or コンニチ depending on context. Null for non-words."
+          },
+          "part_of_speech": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Part Of Speech",
+            "description": "Comma-joined Sudachi POS tuple. Null for non-words."
+          }
+        },
+        "type": "object",
+        "required": [
+          "surface",
+          "char_start",
+          "char_end",
+          "is_word"
+        ],
+        "title": "Token",
+        "description": "One token, carrying everything the import worker needs to persist it.\n\nMaps onto `text_token` (surface/reading/offsets/is_word) and `lemma`\n(normalized_form/dictionary_form/part_of_speech) in V1__initial_schema.sql."
+      },
+      "TokenizeRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "Raw Japanese text to analyse."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SplitMode",
+            "description": "Segmentation granularity. See SplitMode.",
+            "default": "C"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "TokenizeRequest"
+      },
+      "TokenizeResponse": {
+        "properties": {
+          "tokens": {
+            "items": {
+              "$ref": "#/components/schemas/Token"
+            },
+            "type": "array",
+            "title": "Tokens"
+          },
+          "token_count": {
+            "type": "integer",
+            "title": "Token Count",
+            "description": "Convenience: len(tokens)."
+          },
+          "word_count": {
+            "type": "integer",
+            "title": "Word Count",
+            "description": "Tokens with is_word true."
+          },
+          "distinct_lemma_count": {
+            "type": "integer",
+            "title": "Distinct Lemma Count",
+            "description": "Distinct normalized forms — the text's vocabulary size."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tokens",
+          "token_count",
+          "word_count",
+          "distinct_lemma_count"
+        ],
+        "title": "TokenizeResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

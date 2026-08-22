@@ -1,0 +1,47 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (Java 25)
+    runs-on: ubuntu-latest
+    # ubuntu-latest ships Docker pre-installed and running, which the
+    # TextImportIntegrationTest needs — it spins up real Postgres and NLP
+    # containers via Testcontainers, not mocks.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: mvn clean verify
+        working-directory: backend
+        run: mvn -B clean verify
+
+  nlp:
+    name: NLP (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: nlp/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: nlp
+        run: pip install -r requirements-dev.txt
+
+      - name: pytest
+        working-directory: nlp
+        run: python -m pytest tests/ -q

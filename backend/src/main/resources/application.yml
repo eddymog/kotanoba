@@ -1,0 +1,75 @@
+spring:
+  application:
+    name: kotanoba-backend
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:kotanoba}
+    username: ${DB_USER:kotanoba}
+    password: ${DB_PASSWORD:kotanoba}
+
+  jpa:
+    # validate only — Flyway owns schema changes. See claude.md, "No ddl-auto
+    # beyond validate."
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          # Batches multi-row JPA writes (e.g. app_user inserts); does not affect
+          # the text_token path, which bypasses JPA entirely — see TextTokenBatchWriter.
+          batch_size: 50
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+app:
+  jwt:
+    # INSECURE DEFAULT — local dev only. Anything that isn't localhost must
+    # override this via JWT_SECRET, or every token this app issues is
+    # forgeable by anyone who read this file. Must be >= 32 bytes once
+    # UTF-8-encoded (HS256's minimum key length); the default below is 64.
+    secret: ${JWT_SECRET:dev-only-insecure-jwt-secret-do-not-use-in-production-abcdef01}
+    # Short on purpose: a leaked access token is only dangerous for this long.
+    access-token-ttl-minutes: ${JWT_ACCESS_TTL_MINUTES:15}
+    # Long-lived but revocable (refresh_token table), unlike the access token.
+    refresh-token-ttl-days: ${JWT_REFRESH_TTL_DAYS:30}
+
+nlp-service:
+  base-url: ${NLP_SERVICE_URL:http://localhost:8000}
+  # Applied as the HTTP client's connect+read timeout (NlpClientConfig), not a
+  # Resilience4j @TimeLimiter — that annotation only applies to methods
+  # returning CompletionStage, and this call is synchronous per decision #4.
+  # Generous relative to the ~2ms tokenize time measured in nlp/README — this
+  # budget is dominated by network/cold-start, not analysis time.
+  timeout-ms: ${NLP_SERVICE_TIMEOUT_MS:10000}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{correlationId:-'-'}] %logger{36} - %msg%n"
+
+resilience4j:
+  retry:
+    instances:
+      nlpService:
+        max-attempts: 3
+        wait-duration: 500ms
+        # Only retry things a second attempt could plausibly fix — a cold-start
+        # timeout or connection blip. A 4xx (e.g. malformed request) will fail
+        # the same way three times in a row for no benefit.
+        retry-exceptions:
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+          - org.springframework.web.client.ResourceAccessException
+  circuitbreaker:
+    instances:
+      nlpService:
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
