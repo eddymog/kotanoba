@@ -17,4 +17,10 @@ EXPOSE 8000
 # One worker: the Sudachi dictionary is ~100MB resident, and this service is
 # called by the import worker, not by users. Scale by adding containers if the
 # import queue ever backs up — but per claude.md, that day is a long way off.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+#
+# PORT defaults to 8000 for Compose/local dev, where it's fixed. Render
+# assigns its own PORT per service (default 10000) and expects the container
+# to bind to it — shell-form CMD so ${PORT:-8000} actually expands; exec-form
+# CMD (a JSON array) would pass the literal string through unexpanded.
+ENV PORT=8000
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1

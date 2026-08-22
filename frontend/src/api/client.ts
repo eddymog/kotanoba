@@ -1,10 +1,11 @@
 import type { AuthResponse } from "./types";
 
-// Vite dev server proxies /api to the backend (see vite.config.ts) — same
-// origin as far as the browser's concerned, so no CORS story to get right in
-// dev. In a real deployment this would need an actual base URL; not needed
-// yet since nothing is deployed (see design.md).
-const BASE_URL = "";
+// Empty string in local dev: Vite's dev-server proxy makes /api same-origin
+// as far as the browser's concerned (vite.config.ts), so no base URL is
+// needed and no CORS story exists at all. Deployed builds (Vercel) set
+// VITE_API_BASE_URL to the Render backend's public URL at build time —
+// that's when SecurityConfig's CORS allowlist actually starts mattering.
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 const ACCESS_TOKEN_KEY = "kotanoba.accessToken";
 const REFRESH_TOKEN_KEY = "kotanoba.refreshToken";

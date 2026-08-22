@@ -9,7 +9,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .models import TokenizeRequest, TokenizeResponse
@@ -24,6 +24,20 @@ logger = logging.getLogger("kotanoba.nlp")
 # Guardrail, not a scaling limit: a runaway paste should fail fast with a clear
 # error rather than pinning the worker. Roughly a long news article.
 MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "200000"))
+
+# Deployed as a normal (public-URL) free web service rather than a network-
+# isolated private one — see design.md's deployment notes for why. This is
+# the substitute for network isolation: unset (the default, e.g. local dev
+# and Compose) means no check at all, matching claude.md's "never on the
+# read path, called only by the import worker" model where nothing public
+# should be able to reach this anyway. Set only in the deployed environment,
+# where the URL genuinely is public and this is what stands in for that.
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+
+
+def require_internal_api_key(x_internal_api_key: str = Header(default="")):
+    if INTERNAL_API_KEY and x_internal_api_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="missing or invalid X-Internal-Api-Key")
 
 
 @asynccontextmanager
@@ -80,6 +94,7 @@ def health():
     # the Java client is generated against — see decision #1 in claude.md on
     # contract drift being a compile error.
     operation_id="tokenize",
+    dependencies=[Depends(require_internal_api_key)],
 )
 def tokenize_endpoint(
     request: TokenizeRequest,

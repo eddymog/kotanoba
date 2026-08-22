@@ -35,6 +35,12 @@ app:
     access-token-ttl-minutes: ${JWT_ACCESS_TTL_MINUTES:15}
     # Long-lived but revocable (refresh_token table), unlike the access token.
     refresh-token-ttl-days: ${JWT_REFRESH_TTL_DAYS:30}
+  cors:
+    # Comma-separated. Default is fine for local dev, where the Vite proxy
+    # makes the browser see same-origin requests — no CORS involved at all
+    # (vite.config.ts). Only matters once frontend and backend are on
+    # different origins, i.e. once actually deployed.
+    allowed-origins: ${FRONTEND_ORIGINS:http://localhost:5173}
 
 nlp-service:
   base-url: ${NLP_SERVICE_URL:http://localhost:8000}
@@ -44,9 +50,18 @@ nlp-service:
   # Generous relative to the ~2ms tokenize time measured in nlp/README — this
   # budget is dominated by network/cold-start, not analysis time.
   timeout-ms: ${NLP_SERVICE_TIMEOUT_MS:10000}
+  # Empty locally/Compose — the NLP service has no network isolation to fall
+  # back on there either, but nothing untrusted can reach it on a private
+  # Docker network. Set only in the deployed environment, where the NLP
+  # service's URL genuinely is public (see nlp/app/main.py's
+  # INTERNAL_API_KEY) — must match the value configured there exactly.
+  api-key: ${NLP_INTERNAL_API_KEY:}
 
 server:
-  port: ${SERVER_PORT:8080}
+  # Render assigns its own PORT per service; Compose/local dev use SERVER_PORT
+  # (or the 8080 default). Nested placeholder: PORT wins if set, else
+  # SERVER_PORT, else 8080.
+  port: ${PORT:${SERVER_PORT:8080}}
 
 logging:
   pattern:

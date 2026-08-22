@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+import app.main as app_main
 from app.main import MAX_TEXT_CHARS, app
 
 client = TestClient(app)
@@ -54,3 +55,32 @@ def test_openapi_schema_is_generatable():
     schema = client.get("/openapi.json").json()
     assert "/tokenize" in schema["paths"]
     assert "TokenizeResponse" in schema["components"]["schemas"]
+
+
+def test_tokenize_open_when_no_internal_api_key_configured():
+    """Matches local dev / Compose, where INTERNAL_API_KEY is never set —
+    network isolation (nothing else can reach this container) is what stands
+    in for auth there, not this header."""
+    response = client.post("/tokenize", json={"text": "猫"})
+    assert response.status_code == 200
+
+
+def test_tokenize_requires_internal_api_key_when_configured(monkeypatch):
+    """Deployed configuration: a public URL, so this header is what stands in
+    for the network isolation local dev relies on instead."""
+    monkeypatch.setattr(app_main, "INTERNAL_API_KEY", "secret-value")
+
+    rejected = client.post("/tokenize", json={"text": "猫"})
+    assert rejected.status_code == 401
+
+    accepted = client.post(
+        "/tokenize", json={"text": "猫"}, headers={"X-Internal-Api-Key": "secret-value"}
+    )
+    assert accepted.status_code == 200
+
+
+def test_health_never_requires_internal_api_key(monkeypatch):
+    """Render's health checks must reach this with no header at all."""
+    monkeypatch.setattr(app_main, "INTERNAL_API_KEY", "secret-value")
+    response = client.get("/health")
+    assert response.status_code == 200

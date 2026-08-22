@@ -48,11 +48,20 @@ public class NlpClientConfig {
         // identical headers/body succeeds, confirming it's protocol
         // negotiation, not the payload. SimpleClientHttpRequestFactory never
         // attempts anything but HTTP/1.1.
-        RestTemplate restTemplate = builder
+        RestTemplateBuilder configuredBuilder = builder
             .requestFactory(SimpleClientHttpRequestFactory::new)
             .connectTimeout(Duration.ofMillis(properties.timeoutMs()))
-            .readTimeout(Duration.ofMillis(properties.timeoutMs()))
-            .build();
+            .readTimeout(Duration.ofMillis(properties.timeoutMs()));
+
+        // Empty locally/Compose (no network isolation to substitute for
+        // there, but nothing untrusted is on that Docker network either) —
+        // set only when deployed, where the NLP service's URL is genuinely
+        // public. Must match nlp/app/main.py's INTERNAL_API_KEY exactly.
+        if (!properties.apiKey().isBlank()) {
+            configuredBuilder = configuredBuilder.defaultHeader("X-Internal-Api-Key", properties.apiKey());
+        }
+
+        RestTemplate restTemplate = configuredBuilder.build();
 
         ApiClient apiClient = new ApiClient(restTemplate);
         apiClient.setBasePath(properties.baseUrl());
