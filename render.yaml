@@ -1,0 +1,55 @@
+## Render Blueprint — deploys both services in one pass from this repo.
+## Sync docs.render.com/blueprint-spec for field reference.
+##
+## Free-tier services can't receive private-network traffic (only send), so
+## NLP is reachable at its public Render URL, not an internal host:port —
+## which is why it's protected by a shared secret (X-Internal-Api-Key)
+## instead of network isolation. See nlp/app/main.py and
+## NlpClientConfig.java.
+##
+## `sync: false` env vars are prompted for once, at Blueprint creation, in
+## Render's dashboard — never committed here. NLP_SERVICE_URL and
+## FRONTEND_ORIGINS can't be filled in at creation time (they depend on
+## URLs Render assigns during this very deploy, and on Vercel's URL, which
+## doesn't exist yet) — set those in each service's Environment tab after
+## the fact.
+services:
+  - name: kotanoba-backend
+    type: web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_SSL_MODE
+        value: require
+      - key: NLP_SERVICE_URL
+        sync: false
+      - key: NLP_INTERNAL_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_ORIGINS
+        sync: false
+
+  - name: kotanoba-nlp
+    type: web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./nlp/Dockerfile
+    dockerContext: ./nlp
+    healthCheckPath: /health
+    envVars:
+      - key: INTERNAL_API_KEY
+        sync: false

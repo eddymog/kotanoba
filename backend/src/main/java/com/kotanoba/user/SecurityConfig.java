@@ -91,6 +91,8 @@ public class SecurityConfig {
                 // second full pass through the filter chain ending in "access
                 // is denied." Permitting /error is the standard fix.
                 .requestMatchers("/error").permitAll()
+                // Render's healthCheckPath — has no credentials to offer.
+                .requestMatchers("/health").permitAll()
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
