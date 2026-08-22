@@ -3,7 +3,11 @@ spring:
     name: kotanoba-backend
 
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:kotanoba}
+    # sslmode=prefer: works against local Compose Postgres (no SSL configured
+    # — falls back to plain) and would still use SSL if it were available
+    # there too. Neon requires real SSL, so its env sets DB_SSL_MODE=require
+    # explicitly rather than relying on "prefer" to do the right thing.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:kotanoba}?sslmode=${DB_SSL_MODE:prefer}
     username: ${DB_USER:kotanoba}
     password: ${DB_PASSWORD:kotanoba}
 
