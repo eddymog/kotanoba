@@ -682,15 +682,29 @@ per claude.md, each slice ships before the next starts.
 **Verified working end to end** (real Postgres in Docker, real Sudachi call, packaged jar — not just "compiles"):
 `POST /api/texts` with actual Japanese text → 201 with real token/lemma counts → `GET /api/texts` lists it → `PUT /api/lemmas/{id}/status` upserts (confirmed one row, overwritten not duplicated, on a second call) → `GET /api/texts/{id}` correctly returns 501, not a crash.
 
-### Slice 2 — URL import + durable job queue
-- [ ] `import_job` table (status, attempt count, lease expiry)
-- [ ] `SKIP LOCKED` worker loop (decision #6)
-- [ ] Three worker instances in Compose
-- [ ] Exponential backoff + dead-letter
-- [ ] Frontend polls job status, shows real progress
-- [ ] Readability extraction from URL
-- [ ] Concurrency test: N threads racing for one job, exactly-once processing
-- [ ] Deployed
+### Slice 2 — URL import + durable job queue **[shelved, 2026-08-23]**
+
+**Decision: not building this.** claude.md bundles two separable things under
+Slice 2 — URL import (paste a URL, extract readable text, tokenize) and the
+durable `SKIP LOCKED` job queue with three workers. Explicitly rejected the job
+queue: for a single user on Render's free tier running one instance, the
+queue's actual justification is the interview/learning value claude.md names
+at the top of the document, not a functional need — and that's not reason
+enough on its own to add the infrastructure. Per claude.md's own working
+agreement ("push back when I am over-engineering... recognizing when *not* to
+add infrastructure is the better signal"), this is exactly that call, made
+deliberately, not by default. URL import itself also shelved for now — not
+rejected outright, just not currently wanted; if it comes back, it can reuse
+Slice 1's synchronous import path directly with no queue involved.
+
+- [ ] ~~`import_job` table (status, attempt count, lease expiry)~~ — shelved
+- [ ] ~~`SKIP LOCKED` worker loop (decision #6)~~ — shelved
+- [ ] ~~Three worker instances in Compose~~ — shelved
+- [ ] ~~Exponential backoff + dead-letter~~ — shelved
+- [ ] ~~Frontend polls job status, shows real progress~~ — shelved
+- [ ] Readability extraction from URL — not rejected, just not currently wanted; revisit as a plain synchronous addition to Slice 1's import path if it comes back
+- [ ] ~~Concurrency test: N threads racing for one job, exactly-once processing~~ — shelved
+- [ ] ~~Deployed~~ — shelved
 
 ### Slice 3 — difficulty scoring
 - [ ] Bitmap caching design (decision #7)
