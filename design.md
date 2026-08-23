@@ -662,7 +662,16 @@ per claude.md, each slice ships before the next starts.
 - [x] Real auth (Spring Security, JWT + refresh, Argon2) — `com.kotanoba.user`: `POST /api/auth/{register,login,refresh,logout}`. Access tokens are short-lived, self-signed JWTs (HS256, no DB lookup to verify); refresh tokens are opaque random strings, hashed at rest (`V3__refresh_token.sql`), rotated on every use, revocable. `CurrentUser` now reads the authenticated principal instead of its old hardcode. Verified live against the real Compose stack: unauthenticated requests get 401, wrong password gets a generic 401 (no email-enumeration signal), a stolen/reused refresh token is rejected after rotation, and two different registered users each see only their own texts.
 - [x] Docker Compose brings up the full stack with one command — `compose.yaml` at project root (postgres + nlp + backend, healthcheck-gated startup order). Verified live: `docker compose ps` shows all three healthy/up, and a smoke-test import (`POST /api/texts`, id 1) round-tripped through all three containers.
 - [x] CI green — repo pushed to `github.com/eddymog/kotanoba`; both jobs (backend `mvn verify` including the real Testcontainers integration test, NLP pytest) pass on GitHub's own infrastructure, not just locally. First run flagged three action-version deprecation warnings (non-fatal); bumped `checkout`/`setup-java`/`setup-python` to current majors, second run is fully clean.
-- [x] Deployed to a real URL — free tier, chosen for the actual usage pattern (single user, ~20 min/day): **Neon** (Postgres, scale-to-zero, no forced expiry — unlike Render's own free Postgres, which deletes itself after 30+14 days), **Render** (backend + NLP, both free web services), **Vercel** (frontend static build). Frontend live at `https://frontend-eight-indol-91.vercel.app`.
+- [x] Deployed to a real URL — free tier, chosen for the actual usage pattern (single user, ~20 min/day): **Neon** (Postgres, scale-to-zero, no forced expiry — unlike Render's own free Postgres, which deletes itself after 30+14 days), **Render** (backend + NLP, both free web services), **Vercel** (frontend static build). Frontend live at `https://kotanoba.vercel.app` (claimed as a free `.vercel.app`
+  alias via `vercel alias set` — no domain purchase needed; the auto-generated
+  `frontend-eight-indol-91.vercel.app` still works too, just uglier). Vercel's
+  Deployment Protection defaulted to gating this alias behind Vercel's own SSO
+  login even though the raw deployment URL wasn't gated — disabled for production
+  in Project Settings → Deployment Protection, since the whole point is public
+  reachability. `FRONTEND_ORIGINS` on the backend updated to match, plus
+  `SecurityConfig` now strips whitespace from configured origins — a pasted env
+  var value with invisible trailing whitespace is an easy, silent way to break
+  exact-match CORS comparisons.
 
   NLP is a public Render service, not network-isolated — free-tier web services can only send private-network traffic, not receive it, so isolation wasn't actually available at this tier. Substituted a shared-secret header (`X-Internal-Api-Key`) instead; verified live that a request without it gets 401 and one with it succeeds.
 
