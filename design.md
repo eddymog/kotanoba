@@ -22,12 +22,13 @@ Numbers here match the section numbers below.
 | 3 | API contract for Slice 1 | **Decided — locked** |
 | 4 | Slice 1 import path — synchronous or through the durable job queue? | **Decided — sync for Slice 1** |
 | 5 | Read-path query (load text + merge statuses) | **Decided and implemented** — `TextReadRepository` |
-| 6 | `SKIP LOCKED` worker loop and lease handling | Open — Slice 2 |
-| 7 | Bitmap caching and invalidation logic | Open — Slice 3 |
+| 6 | `SKIP LOCKED` worker loop and lease handling | **Rejected — out of scope, see #12** |
+| 7 | Bitmap caching and invalidation logic | **Rejected — plain SQL instead, see #12** |
 | 8 | Frontend component shape | Draft |
 | 9 | Frequency-ranked vocabulary reference (top ~8–10k lemmas) | Role + sort metric decided; source and schema placement open — Slice 3 |
 | 10 | Persistence strategy — JPA vs. raw SQL, per operation | **Decided** |
 | 11 | Toolchain findings from getting Slice 1's backend running | Reference — not a decision |
+| 12 | Over-engineering review — job queue and bitmap caching | **Decided — both rejected** |
 
 ---
 
@@ -182,7 +183,9 @@ written, so the table scales with words actually touched, not with vocabulary si
 for a 2,000-word article.
 
 **`text.lemma_ids` is a plain `BIGINT[]`, not a serialized bitmap.** Durable and
-inspectable in Postgres; the RoaringBitmap is a derived Redis artifact (Slice 3).
+inspectable in Postgres — this is the only representation now (§12, 2026-08-23:
+the RoaringBitmap-in-Redis layer this array was originally meant to feed was
+rejected as unnecessary at this app's scale; `lemma_ids` is queried directly).
 
 **Non-word tokens get rows too** (`is_word = false`, null `lemma_id`) so the reader
 rebuilds the document in order without re-parsing `body`.
@@ -192,9 +195,10 @@ chosen granularity only. Storing enough to re-segment later is speculative
 complexity for a mode change that may never happen; re-import is the correct and
 cheap answer if it does.
 
-Deferred: refresh-token storage (goes in its own migration when auth is built), and
-the partial index on `status = 'KNOWN'` for bitmap building — the PK prefix already
-covers it, revisit only if Slice 3 benchmarks say otherwise.
+Deferred: refresh-token storage (goes in its own migration when auth is built —
+done, `V3__refresh_token.sql`), and a partial index on `status = 'KNOWN'` for the
+Slice 3 difficulty query — the PK prefix already covers it, revisit only if it's
+ever actually slow.
 
 ---
 
@@ -271,8 +275,9 @@ costs ~700 status lookups (one per distinct lemma), never 2,000.
 Why not a single `LEFT JOIN`: it works and it's less code, but status would repeat
 on every token (~3× redundancy at 2,000 tokens / 700 lemmas), and it welds "what
 words are in this text" to "what does this user know" in one query. Keeping them
-separate is what lets Slice 3 swap step 2 for a cached bitmap without touching
-step 1.
+separate is just cleaner regardless of what Slice 3 ends up doing with difficulty
+scoring (§12: turned out to be a plain SQL query too, not a bitmap cache — but the
+separation here was worth it on its own terms either way).
 
 **Implementation:** `JdbcTemplate`, not JPA — this is the read path claude.md means
 by "know when to bypass the ORM." Hibernate would want entity graphs for a join
@@ -294,19 +299,23 @@ make the numbers meaningful.
 
 ---
 
-## 6. `SKIP LOCKED` worker loop and lease handling **[discuss]** — Slice 2
+## 6. `SKIP LOCKED` worker loop and lease handling **[rejected, 2026-08-23]**
 
-Not drafting this — per the working agreement. Placeholder for Slice 2, when
-imports move onto the durable queue (`import_job` table, three workers in Compose,
-lease expiry, exponential backoff, dead-letter after N attempts).
+Was a placeholder for Slice 2's durable import queue. That queue is now explicitly
+out of scope — see the over-engineering review below and claude.md's Out of Scope
+section. Nothing to design here unless the durable-queue decision itself gets
+revisited, which would need an actual reason (multi-user, or import genuinely
+failing mid-request in practice), not a preemptive one.
 
 ---
 
-## 7. Bitmap caching and invalidation **[discuss]** — Slice 3
+## 7. Bitmap caching and invalidation **[rejected, 2026-08-23]**
 
-Not drafting this — per the working agreement. Placeholder for when Slice 3 design
-starts (difficulty scoring via RoaringBitmap intersection, per claude.md). See §9c
-— frequency weighting likely adds a third bitmap to the intersection.
+Was a placeholder for RoaringBitmap-in-Redis difficulty scoring. Replaced by a
+plain SQL query — see the over-engineering review below. No caching layer, so
+nothing to design here: the query runs fresh on every request, which is fast
+enough at this app's actual scale that a cache would be solving a problem that
+doesn't exist yet.
 
 ---
 
@@ -415,22 +424,22 @@ tuning, cheap to change once there are real texts to test against.
   (re-seeding a frequency source means updating rows in place).
 - **Separate reference table** (`lemma_frequency(lemma_id, rank, source)`) — keeps
   the reference data swappable/versionable (different frequency corpora, e.g. BCCWJ
-  vs. a subtitle-frequency list) without touching `lemma` rows; costs a join on the
-  scoring path, though that path is already doing a Redis bitmap step, not a raw SQL
-  scan.
+  vs. a subtitle-frequency list) without touching `lemma` rows; costs one more join
+  on the scoring path, which (per §7) is a plain SQL query anyway — a well-indexed
+  join at this app's scale is not a real cost either way.
 - Either way, the frequency source itself needs picking (e.g. BCCWJ, a
   subtitle/Netflix-style frequency list, or a curated JLPT-tier list) and a one-time
   seed migration — the harder open question is whether the source's tokenization
   matches Sudachi's lemma boundaries closely enough to map cleanly, which is worth a
   quick spot-check before committing.
 
-### 9c. Interaction with bitmap scoring (decision #7)
+### 9c. Interaction with difficulty scoring (decision #7)
 
-Since frequency is a scoring weight, the RoaringBitmap intersection in claude.md's
-difficulty-scoring design likely needs a third bitmap — "lemmas in the top-N
-frequency band" — intersected against the user's known-lemma bitmap and the text's
-lemma bitmap, rather than a plain two-way intersection. Worth resolving alongside
-decision #7 when Slice 3 design starts, not before — Slice 1 doesn't need this yet.
+No bitmaps to interact with (§7, rejected) — frequency weighting is just another
+column in the same SQL query, joined or referenced alongside `user_lemma_status`,
+contributing a `1/log(rank)`-style weight per lemma (§9d) to one score computed in
+one query. Nothing extra to design here beyond the query itself, when it gets
+written.
 
 **Decision on 9a:** scoring signal only (no bootstrapping). 9b (schema placement:
 column vs. reference table) and the frequency source itself are still open — worth
@@ -539,11 +548,17 @@ verifies referential integrity for *this* import, not global table size.
 
 `mvn clean verify`: 2 tests, 0 failures.
 
-### Slice 3 consequence
+### Slice 3 consequence — superseded, 2026-08-23
 
-Every status write invalidates the user's cached known-lemma bitmap. At this write
-frequency the bitmap must be **updated incrementally** (flip one bit), never
-rebuilt from Postgres per click. Fold into decision #7.
+This used to say every status write invalidates a cached known-lemma bitmap, and
+that the bitmap would need incremental updates rather than a full rebuild per
+click. Moot now: §12 rejected the bitmap/cache layer entirely, so there's nothing
+to invalidate — the Slice 3 difficulty query just reads current
+`user_lemma_status` rows fresh on every request, same as everything else. Worth
+keeping this note as a record of *why* that would have been a real problem if the
+cache had been built — the write frequency here is genuinely high (decision #10),
+so "just recompute the cache" was never going to be a safe shortcut, which is
+part of why avoiding the cache altogether was the better call.
 
 ---
 
@@ -639,6 +654,65 @@ explicitly; a regression test now pins the correct status for this specific case
 
 ---
 
+## 12. Over-engineering review **[decided, 2026-08-23]**
+
+Prompted by pinning down actual scale for the first time: single user, a library
+that will realistically reach hundreds of documents, tens of thousands of known
+words over time — "that's pretty much it." Two pieces of planned infrastructure
+were re-examined against that number, not against what a larger app would need.
+
+**Rejected: the durable `SKIP LOCKED` job queue** (`import_job` table, three
+workers, lease handling, exponential backoff, dead-letter). Its justification was
+never "the app is too slow" — Slice 1's synchronous import already works — it was
+resilience against a crash mid-import, plus the interview value of building it.
+For one user on one backend instance, that's a real but rare failure mode, and the
+fallback (the import fails, you paste it again) is cheap. The interview-value
+argument was named explicitly and ruled insufficient on its own: claude.md already
+says this project exists partly to teach interview-relevant skills, so "this would
+be good practice" can't be the deciding factor for *every* piece of infrastructure
+or the over-engineering guardrail means nothing. See claude.md's Import pipeline
+and Out of Scope sections, and decision #6 above.
+
+**Rejected: RoaringBitmap difficulty scoring cached in Redis.** Replaced by a plain
+SQL query, computed fresh on every request, no caching layer:
+
+```sql
+SELECT text.id,
+       count(*) FILTER (WHERE uls.status = 'KNOWN') AS known_count,
+       array_length(text.lemma_ids, 1) AS total_count
+FROM text
+CROSS JOIN LATERAL unnest(text.lemma_ids) AS lemma_id
+LEFT JOIN user_lemma_status uls
+       ON uls.lemma_id = lemma_id AND uls.user_id = text.user_id
+WHERE text.user_id = ?
+GROUP BY text.id
+```
+
+Already served by an index that exists for an unrelated reason —
+`user_lemma_status`'s primary key is exactly `(user_id, lemma_id)` (decision #2).
+At "hundreds of documents, tens of thousands of known words," this is single-digit
+milliseconds, no bitmap library, and — concretely — Redis isn't running anywhere in
+this stack right now, so skipping it avoids standing up new infrastructure *and*
+solving cache invalidation, which decision #10 already flagged as the hard part of
+the bitmap design if it were ever built. Frequency weighting (§9) survives this
+change unchanged — it's just another term in the same query, not something that
+depended on bitmaps existing. See claude.md's Core domain model section, and
+decisions #6 and #7 above.
+
+**What this doesn't touch:** the read-path query (decision #5) stays exactly as
+built — merging 2,000 tokens against ~700 statuses in one query instead of 700 is
+not scale-dependent the way library-wide difficulty scoring is; it's the
+difference between one query and 700 on a single page load, which matters at any
+scale including one user. Resilience4j on the NLP call also stays — cheap (a few
+annotations, no new service to run) and defends against a failure mode this
+deployment genuinely has (Render's free tier can restart or cold-start the NLP
+service). The distinction that mattered throughout: infrastructure whose cost is
+"more code in this codebase" survived; infrastructure whose cost is "a new service
+to operate, with its own failure modes and invalidation logic" did not, unless the
+app actually needs it at its actual scale.
+
+---
+
 ## Progress checklist
 
 Mirrors the build order in claude.md. Check off as work lands and is deployed —
@@ -706,12 +780,12 @@ Slice 1's synchronous import path directly with no queue involved.
 - [ ] ~~Concurrency test: N threads racing for one job, exactly-once processing~~ — shelved
 - [ ] ~~Deployed~~ — shelved
 
-### Slice 3 — difficulty scoring
-- [ ] Bitmap caching design (decision #7)
+### Slice 3 — difficulty scoring **[revised, 2026-08-23 — no bitmaps/Redis]**
+- [ ] ~~Bitmap caching design (decision #7)~~ — rejected, see over-engineering review
 - [ ] Frequency reference: pick source, schema placement (decision #9b)
 - [ ] Seed migration for top ~8–10k frequency-ranked lemmas
-- [ ] RoaringBitmap intersection scoring
-- [ ] Redis caching of user + text bitmaps
+- [ ] Plain SQL difficulty-scoring query (replaces RoaringBitmap intersection)
+- [ ] ~~Redis caching of user + text bitmaps~~ — rejected, no cache layer at all
 - [ ] Library view sorted by frequency-weighted difficulty
 - [ ] Deployed
 

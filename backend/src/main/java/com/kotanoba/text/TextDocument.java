@@ -17,12 +17,12 @@ import org.hibernate.type.SqlTypes;
  * unquoted.
  *
  * <p>lemmaIds maps V1__initial_schema.sql's native {@code BIGINT[]} column —
- * the durable, inspectable copy of the distinct lemma set (design.md §2: a
- * plain array, not a serialized bitmap). The RoaringBitmap used for
- * difficulty scoring (Slice 3) is a derived Redis artifact built from this
- * column, not the other way around. {@code @JdbcTypeCode(SqlTypes.ARRAY)} is
- * what makes Hibernate 6 map a plain {@code List<Long>} onto a real Postgres
- * array instead of expecting a join table.
+ * the distinct lemma set for this text (design.md §2: a plain array). Slice
+ * 3's difficulty scoring queries this column directly with plain SQL; no
+ * bitmap library, no cache (see design.md's over-engineering review).
+ * {@code @JdbcTypeCode(SqlTypes.ARRAY)} is what makes Hibernate 6 map a plain
+ * {@code List<Long>} onto a real Postgres array instead of expecting a join
+ * table.
  */
 @Entity
 @Table(name = "text")

@@ -101,9 +101,9 @@ CREATE TABLE text (
     body        TEXT        NOT NULL,   -- original text; token offsets index into this
     source_url  TEXT,                   -- null for pasted text (Slice 1)
 
-    -- Distinct lemma set for this text, as a plain array. The RoaringBitmap
-    -- used for difficulty scoring (Slice 3) is derived from this and cached in
-    -- Redis — this column is the durable source, Redis holds the fast copy.
+    -- Distinct lemma set for this text, as a plain array. Slice 3's
+    -- difficulty scoring reads this directly with a plain SQL query — no
+    -- bitmap library, no cache (see design.md's over-engineering review).
     lemma_ids   BIGINT[]    NOT NULL DEFAULT '{}',
 
     token_count INT         NOT NULL DEFAULT 0,
