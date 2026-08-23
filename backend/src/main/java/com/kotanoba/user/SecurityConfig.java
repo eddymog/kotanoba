@@ -39,7 +39,13 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource(CorsProperties properties) {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(properties.allowedOrigins());
+        // CORS origin matching is an exact string comparison against the
+        // browser's Origin header, which never has surrounding whitespace —
+        // a pasted env var value that does (a trailing space is easy to
+        // introduce and impossible to see in a dashboard text field) fails
+        // to match and silently breaks every cross-origin request. Trimming
+        // here means that class of mistake can't happen again.
+        configuration.setAllowedOrigins(properties.allowedOrigins().stream().map(String::strip).toList());
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
 
