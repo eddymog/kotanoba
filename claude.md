@@ -141,7 +141,10 @@ paired with it is dropped outright; if URL import comes back, it stays synchrono
 **Slice 3.** Difficulty scoring — a plain SQL query over `lemma_ids`/`user_lemma_status`,
 library view sorted by the result. No bitmaps, no Redis (see Core domain model, above).
 
-**Slice 4.** SRS review mode. Implement **FSRS**, not SM-2.
+**Slice 4.** ~~SRS review mode. Implement FSRS, not SM-2.~~ Rejected, 2026-08-25 —
+not a scope/effort tradeoff like the job-queue rejection below, a straightforward
+"don't want Anki-style cards in this project." Vocabulary status (Slice 3's browse
+page) is the review surface instead.
 
 **Slice 5.** Reading disambiguation (furigana) and script-variant lemma normalization.
 

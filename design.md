@@ -25,10 +25,11 @@ Numbers here match the section numbers below.
 | 6 | `SKIP LOCKED` worker loop and lease handling | **Rejected — out of scope, see #12** |
 | 7 | Bitmap caching and invalidation logic | **Rejected — plain SQL instead, see #12** |
 | 8 | Frontend component shape | Draft |
-| 9 | Frequency-ranked vocabulary reference (top ~8–10k lemmas) | Role + sort metric decided; source and schema placement open — Slice 3 |
+| 9 | Frequency-ranked vocabulary reference (top ~8–10k lemmas) | **Decided — jpdb v2.2 top 10k, `word_frequency` reference table** |
 | 10 | Persistence strategy — JPA vs. raw SQL, per operation | **Decided** |
 | 11 | Toolchain findings from getting Slice 1's backend running | Reference — not a decision |
 | 12 | Over-engineering review — job queue and bitmap caching | **Decided — both rejected** |
+| 13 | Vocabulary browse page — interactive triage of the frequency list | **Decided and implemented** — also fixed a real hiragana/katakana bug in difficulty scoring |
 
 ---
 
@@ -41,7 +42,7 @@ decision that shapes the most downstream work, so worth getting right before Sli
 
 One thing that changes the calculus versus a typical NLP-service choice: per the
 hard architectural rule, **Python is never on the read path** — it's called once per
-document, asynchronously, from the import worker. Raw tokens/sec throughput matters
+document, synchronously, from the import request. Raw tokens/sec throughput matters
 much less here than dictionary quality and what the library gives you for free.
 
 ### Option A — Sudachi (SudachiPy)
@@ -211,7 +212,7 @@ reload. Locked for Slice 1:
 |---|---|
 | `POST /api/texts` | Submit pasted text; tokenizes and returns the created text synchronously (see decision #4) |
 | `GET /api/texts/{id}` | Fetch a text's tokens merged with the current user's statuses for the lemmas in it |
-| `GET /api/texts` | List library (id, title, created date — difficulty scoring comes in Slice 3) |
+| `GET /api/texts` | List library (id, title, created date — difficulty scoring comes in Slice 3, landed 2026-08-23) |
 | `PUT /api/lemmas/{id}/status` | Set status (`NEW`/`LEARNING`/`KNOWN`/`IGNORED`) for a lemma |
 
 `GET /api/texts/{id}` is the read-path query from decision #5 — both the endpoint
@@ -419,19 +420,56 @@ tuning, cheap to change once there are real texts to test against.
 
 ### 9b. Where the frequency data lives
 
-- **Column on `lemma`** (`frequency_rank INT NULL`, null beyond top 10k) — simplest,
-  one join-free lookup, but ties the reference data's lifecycle to the `lemma` table
-  (re-seeding a frequency source means updating rows in place).
-- **Separate reference table** (`lemma_frequency(lemma_id, rank, source)`) — keeps
-  the reference data swappable/versionable (different frequency corpora, e.g. BCCWJ
-  vs. a subtitle-frequency list) without touching `lemma` rows; costs one more join
-  on the scoring path, which (per §7) is a plain SQL query anyway — a well-indexed
-  join at this app's scale is not a real cost either way.
-- Either way, the frequency source itself needs picking (e.g. BCCWJ, a
-  subtitle/Netflix-style frequency list, or a curated JLPT-tier list) and a one-time
-  seed migration — the harder open question is whether the source's tokenization
-  matches Sudachi's lemma boundaries closely enough to map cleanly, which is worth a
-  quick spot-check before committing.
+**Decided: source is the jpdb v2.2 frequency list, top 10,000 ranks, 2026-08-23.**
+
+[Kuuuube/yomitan-dictionaries](https://github.com/Kuuuube/yomitan-dictionaries) publishes
+a free, no-registration `term / reading / frequency / kana_frequency` TSV scraped from
+jpdb.io's corpus of light novels, visual novels, anime, and drama — content much closer
+to what this app's users will actually import than BCCWJ's news/blog-heavy register.
+Considered and rejected: BCCWJ (more academic/authoritative, but distributed as
+short-unit-word counts requiring an access request and unit-conversion work before it's
+usable) and the Leeds internet corpus (older, noisier, no reading field).
+
+**Spot-check, before committing:** tokenized a sentence exercising every hard case
+claude.md calls out (conjugation, a compound noun, an auxiliary chain, a script variant —
+今日は東京都庁に行って、大きい寿司を食べました。友達に頑張ってと言われたので、出来る
+ことをやってみます。) with the local Sudachi install and looked up each
+`dictionary_form()` against the CSV's `term` column. 16 of 17 lemmas matched by exact
+string, with sane ranks (function words rank <20, content words in the hundreds–
+thousands). The one miss, `れる` (passive/potential auxiliary), is closed-class grammar,
+not vocabulary — covered by a small fallback weight for unmatched lemmas (§9d already
+leaves this open as a tuning question).
+
+**Real finding, not just a clean bill of health:** `できる` (rank 94) and `出来る`
+(rank 1302) are two separate rows. This is exactly the script-variant problem from
+claude.md item 4 — until Slice 5's normalization lands, a text's difficulty score will
+depend on which spelling it happens to use, even though a reader who knows one
+typically knows the other. Not a blocker, just a known Slice 3 → Slice 5 sequencing
+wrinkle.
+
+**Data prep done:** downloaded the full list (278,947 rows), sliced to rank ≤ 10,000
+(10,000 rows — filtered on the rank column, not line count, since the file has a small
+number of non-sequential rank gaps), then deduped 53 exact `(term, reading)` collisions
+(the scrape occasionally counts the same surface form twice, e.g. under different parts
+of speech) by keeping the lowest rank per pair. Final artifact: 9,944 unique
+`(term, reading, rank)` rows, ranks 1–10,000, sitting in scratch pending the schema
+decision below.
+
+**Decided: separate reference table, 2026-08-23.** `word_frequency(term, reading,
+rank, source)`, keyed on the *text* of the term/reading rather than a `lemma_id` FK,
+replace-only (one source loaded at a time, no coexistence) —
+seeds independently of whether any of those 9,944 words have ever been imported yet
+(`lemma` rows are only created as a side effect of importing a text, per decision #2,
+so a `lemma_id` FK would force bulk-creating placeholder `lemma` rows just to hold a
+rank). The Slice 3 query joins by matching `lemma.dictionary_form`/`reading` text
+against this table instead. Costs one more join on the scoring path, which (per §7) is
+a plain SQL query anyway — not a real cost at this scale. Also keeps the reference
+data swappable/versionable (re-seeding from a new source is a table swap, not an
+update-in-place on `lemma`) if the source ever changes.
+
+The actual DDL and the seed migration that loads
+`backend/src/main/resources/seed-data/jpdb_v2.2_freq_top10k.tsv` are still Eddy's to
+write, per the working agreement.
 
 ### 9c. Interaction with difficulty scoring (decision #7)
 
@@ -441,10 +479,10 @@ contributing a `1/log(rank)`-style weight per lemma (§9d) to one score computed
 one query. Nothing extra to design here beyond the query itself, when it gets
 written.
 
-**Decision on 9a:** scoring signal only (no bootstrapping). 9b (schema placement:
-column vs. reference table) and the frequency source itself are still open — worth
-resolving alongside decision #7 when Slice 3 design starts, since this doesn't block
-Slice 1.
+**Decision on 9a:** scoring signal only (no bootstrapping). **Decision on 9b:** source
+is jpdb v2.2, top 10,000 ranks, spot-checked against Sudachi; placement is a separate
+`word_frequency` reference table, keyed by term/reading text (see above, 2026-08-23).
+The DDL and seed migration itself are still Eddy's to write, per the working agreement.
 
 ---
 
@@ -713,6 +751,620 @@ app actually needs it at its actual scale.
 
 ---
 
+## 13. Vocabulary browse page **[decided, implemented, 2026-08-23]**
+
+Not in claude.md's original slice list — came out of wanting a page to triage the
+frequency list itself: browse the top 10k in bands of 100, see current status per
+word, and mark words known directly from there, not only by reading them.
+
+**Decided: interactive, not read-only.** A word_frequency word can be marked before
+it's ever been read (word_frequency is deliberately independent of `lemma` — §9b), so
+clicking a NEW word here needs to create a `lemma` row on the spot. Rejected a
+placeholder part-of-speech for that row (`normalized_form`/`dictionary_form` would
+just be the raw term, POS some sentinel like `'UNKNOWN'`) in favor of resolving it
+through a real Sudachi call — `NlpTokenizerClient` was already there from Slice 1, and
+reusing `LemmaBulkUpsertRepository`'s existing `ON CONFLICT (normalized_form,
+part_of_speech)` upsert means a word that normalizes to a script variant already in
+the database (marking 出来る when できる was already imported, say) correctly resolves
+to that same lemma row instead of creating a duplicate. Falls back to a raw-term
+placeholder only if Sudachi can't cleanly resolve the single word to one token — rare,
+given the frequency list is already dictionary-form text (§9b's spot-check).
+
+New endpoints: `GET /api/vocabulary?page=N` (rank band `[(N-1)*100+1, N*100]`,
+`VocabularyBrowseRepository`), `PUT /api/vocabulary/status` (body: term, reading,
+status — keyed by text, not a lemma id, since one may not exist yet;
+`VocabularyLemmaResolver` + the existing `UserLemmaStatusRepository` upsert).
+
+**Real bug found and fixed while building this — V6 migration.** `word_frequency.reading`
+is hiragana (jpdb's source data, V5's seed); `lemma.reading_form` is always Sudachi's
+katakana. Every query joining on both (`wf.reading = l.reading_form`) — this page's
+browse query *and* §9's difficulty-scoring query in `TextLibraryRepository` — silently
+never matched on reading, so every lemma fell through to the unmatched-word floor
+weight regardless of its real rank. Difficulty scoring quietly degraded to a flat
+known/total ratio without erroring, which is exactly why the existing integration test
+didn't catch it: "mark everything known" vs. "mark nothing known" scores 1.0 vs. 0.0
+either way, whether real per-word weighting is active or not. Caught by actually
+exercising the write-then-read path end to end against a running instance, not by
+reading the code.
+
+Fixed with `V6__word_frequency_reading_katakana.sql` — `translate()` over the full
+hiragana block (U+3041–3096) to its katakana counterpart (U+30A1–30F6), a constant
++0x60 codepoint offset verified against real Sudachi output before writing it. New
+migration, not an edit to V5, since V5 had already run against real data (same
+precedent as V1's checksum fix earlier this session). Added
+`difficultyScoreWeighsByRealFrequencyRankNotJustKnownCount` as a regression test —
+marking a rank-11 word known vs. marking an unranked word known, same "1 of N known"
+shape, asserts the scores differ by a wide margin. Only real per-word weighting can
+pass that; the old bug's flat-ratio behavior would have scored both identically.
+
+### Romaji and part of speech, added to the browse page — 2026-08-23
+
+**Romaji:** pure frontend, no decision needed — `katakanaToRomaji.ts`, a lookup-table
+converter (gojuon, dakuten/handakuten, youon, common loanword digraphs, sokuon, long
+vowel mark). Verified against real words (らーめん → `raamen`, ちょっと → `chotto`,
+including correct sokuon-into-"tch" handling) before wiring in, not just eyeballed.
+
+**Part of speech: decided — add `word_frequency.part_of_speech`, filled by a one-time
+local batch, not a live call.** Showing POS only for words with an existing `lemma` row
+would leave most of a never-read page blank, which defeats the point of a browse page.
+Calling Sudachi live per page view was rejected on two grounds: it would create a
+`lemma` row for every word merely *viewed* (browsing should not silently accumulate the
+same footprint as reading does — the exact behavior §9a's "no bootstrapping" decision
+was protecting), and claude.md's hard rule keeps the NLP service off the read path
+regardless.
+
+Resolved all 9,944 words in one local batch (`V7__word_frequency_part_of_speech.sql`
+adds the column; `V8__SeedWordFrequencyPartOfSpeech.java` loads it, same shape as V5) —
+16 concurrent requests to the already-running local NLP service, 6 seconds total, not
+run through a migration calling a live service (a migration shouldn't need another
+service up to run — same reasoning as keeping this off the read path generally).
+~1,774 of the 9,944 are multi-morpheme entries jpdb counts as one frequency unit but
+Sudachi correctly splits (には → 助詞+助詞, でもない → 助詞+助詞+形容詞); their column
+holds each token's top-level category joined with "+" rather than a single tag. 2
+symbol-like entries (○, ヶ) resolved to no word token and are left null. Caught and
+fixed the same hiragana/katakana mismatch as V6 before it could bite twice — the batch
+script's output reading column had to be converted to katakana to match what V6 had
+already done to the table, or V8's `UPDATE ... WHERE term = ? AND reading = ?` would
+have silently matched nothing.
+
+English display labels (Noun/Verb/Particle/etc., including for the "+"-joined
+multi-token case) live in the frontend (`partOfSpeechLabel.ts`) — the backend keeps the
+raw Sudachi tag, same "store the source data, derive the display form" pattern as
+`dictionary_form`/`normalized_form`.
+
+### Meaning, added to the browse page — 2026-08-23
+
+**Decided: `word_frequency.meaning`, seeded once from JMdict.** Same shape as ranks
+(V5) and part of speech (V8): a static one-time local batch, no live dependency.
+Source is [jmdict-simplified](https://github.com/scriptin/jmdict-simplified)'s
+"common-only" English JSON (JMdict itself is EDRDG's; CC BY-SA 4.0 / no restriction on
+commercial use, actively maintained — weekly releases) rather than raw JMdict XML,
+since the common-only English variant is already close to exactly the size and shape
+needed (22,630 entries vs. our 9,944 words) and self-contained JSON, not XML with
+custom entity references, to parse.
+
+**Spot-check before committing (per the same discipline as source picks) found a real
+mapping problem, not just a clean match.** JMdict's kana field is hiragana for native
+words — consistent with jpdb, but the *reading* isn't the issue this time. The issue:
+の has no kanji-less entry in JMdict at all — it exists only as a reading of two
+unrelated kanji headwords (乃/之 = the possessive particle, 野/埜 = "field"), so a
+naive kana-only lookup for a pure-kana top-ranked particle would be ambiguous between
+unrelated words. Resolved by reusing V8's already-computed Sudachi part-of-speech to
+disambiguate: prefer the JMdict sense whose POS agrees with what Sudachi resolved for
+that word (の → 助詞/particle → picks the possessive-particle entry, not "field").
+
+**Matching strategy:** kanji-exact match first (content words — 猫, 食べる, 難解: 6,005
+of 7,567 kanji-bearing words, 79.4%, rising to 81.1% once the kana+POS fallback catches
+kanji spellings whose exact text isn't in JMdict as-is). Kana match with POS
+disambiguation as fallback, used both for pure-kana words and for the kanji-bearing
+words that missed the direct match. Overall: **75.4% (7,500/9,944)** get a confident
+meaning; the rest — mostly multi-morpheme entries jpdb counts as one frequency unit but
+that don't correspond to a single dictionary headword (ような, なので, 気がする), the
+same phenomenon V8's "+"-joined POS exists for — get no meaning rather than a guessed
+one. Verified match quality by actually running the strategy against all 9,944 words
+(not just eyeballing a handful) before writing any schema, per your explicit ask to see
+coverage first.
+
+Migrations: `V9__word_frequency_meaning.sql` (column), `V10__SeedWordFrequencyMeaning.java`
+(loads `seed-data/jpdb_v2.2_freq_top10k_meaning.tsv`, same Java-migration shape as V5/V8).
+Displayed in the click-to-expand status picker, not always-on in the grid — glosses run
+long (も: "too; also; in addition; as well; (not) either (in a negative sentence)"),
+so showing them under every word in a dense 100-word grid would hurt scannability more
+than it'd help; romaji and POS stay always-visible since they're short.
+
+### Status filter, added to the browse page — 2026-08-24
+
+**Decided: offset pagination, not rank-band, and it applies uniformly whether or not a
+filter is active.** The original `page=N` meant "ranks (N-1)*100+1..N*100" — fine
+unfiltered, but a status filter matches an arbitrary, scattered subset of ranks, so
+most rank-bands would come back empty under a filter. Switched
+`VocabularyBrowseRepository` to a `WITH scored AS (...)` CTE (the same per-word status
+computation as before) followed by an optional `WHERE status = ?` and
+`ORDER BY rank LIMIT ? OFFSET ?` — one query shape for both cases, and unfiltered pages
+are now always exactly 100 words (extending slightly past a round rank number to make
+up the count, when the seed data's dedup has left a gap) rather than occasionally 99.
+
+`GET /api/vocabulary?page=N&status=KNOWN` (status optional). Frontend: pill filter
+buttons above the grid (All/New/Learning/Known/Ignored), state kept in the URL's search
+params alongside `page` (bookmarkable, and resets to page 1 on filter change). The
+status-change mutation still updates optimistically in place for instant feedback, but
+now also invalidates the query on settle — under a filter, marking a word's status can
+remove it from view entirely (a NEW-filtered word marked KNOWN should disappear), which
+an in-place optimistic patch can't express on its own.
+
+### Part-of-speech filter, combinable with status — 2026-08-24
+
+**Decided: `word_frequency.pos_categories TEXT[]`, derived by pure SQL from the
+existing `part_of_speech` column — no new Sudachi calls, unlike V8/V10.**
+`part_of_speech` is either a full Sudachi tag (`動詞,一般,*,*,...`) or, for
+multi-morpheme entries, several categories joined with `+` (`助詞+助詞` — see V8);
+neither shape supports a plain equality filter. `V11__word_frequency_pos_categories.sql`
+splits on `+`, takes each segment's text before its first comma, dedupes, and stores
+the result as an array (`{動詞}`, `{助詞,形容詞}`) — verified against real rows (の →
+`{助詞}`, でもない → `{助詞,形容詞}`) before writing the migration.
+
+`GET /api/vocabulary?status=KNOWN&pos=動詞` — both filters are plain `AND`-ed
+conditions on the same `scored` CTE (`VocabularyBrowseRepository`); `pos` isn't
+validated against a known set, an unrecognized value just matches nothing. Frontend:
+a dropdown (values are the raw Japanese category, labels are `partOfSpeechLabel.ts`'s
+English names) next to the status pills, same URL-search-param pattern as `status`.
+
+**Real bug caught while testing this, not by inspection.** The new integration test
+initially failed with an empty result for `pos=動詞` even though a plain `curl` to the
+identical URL worked. Root cause: `URLEncoder.encode`-ing the Japanese value by hand
+before handing it to `TestRestTemplate.exchange(String, ...)` double-encodes it —
+`exchange(String, ...)` runs its argument through Spring's own URI-template handling,
+which doesn't know a `%E5%8B...` sequence is already encoded and encodes the `%`
+again. Fixed by building the request with `UriComponentsBuilder` (against
+`restTemplate.getRootUri()`) and calling `.encode()` exactly once, then passing the
+resulting `URI` object — which bypasses the string-template path entirely — rather
+than a hand-built query string.
+
+---
+
+## 14. Library page: delete, search, sort, pagination, last-opened — 2026-08-24
+
+Backend, following up on the `ui.md` library-page suggestions:
+
+- **`DELETE /api/texts/{id}`** — ownership-scoped the same way as `GET /{id}` (a
+  text belonging to another user 404s, doesn't delete). `text_token` cascades via
+  its existing FK (V1), so the endpoint is a single statement.
+- **`?q=` / `?sort=DIFFICULTY|RECENT`** on `GET /api/texts` — title search
+  (case-insensitive `ILIKE`) and a whitelisted sort enum (`TextSortOrder`), never a
+  raw request string spliced into `ORDER BY`.
+- **Pagination**, built ahead of an actual need at this app's scale (claude.md's own
+  ceiling is "hundreds of documents") — built because explicitly requested, the same
+  "not urgent, but you asked" distinction as the over-engineering review, not a
+  reversal of it. Response shape changed from a bare array to
+  `TextLibraryPageResponse(page, totalPages, texts)`, matching `VocabularyPageResponse`'s
+  shape.
+- **`text.last_opened_at`** (`V12`) — scoped deliberately small (a recency
+  timestamp, not exact resume position) per the explicit choice between the two when
+  this was proposed. Set by `GET /{id}` (opening, not importing, is what counts),
+  read-only elsewhere.
+
+**Two real bugs found by actually running the tests, not by inspection** — both
+Spring Data JPA derived methods that mutate data outside a transaction:
+`deleteByIdAndUserId` (a `deleteBy...` derived method) and `touchLastOpenedAt` (an
+`@Modifying @Query` update) both threw `TransactionRequiredException` /
+`InvalidDataAccessApiUsageException` the first time they actually ran, because
+neither the repository method nor the calling controller action opens a transaction
+on its own. Fixed by adding `@Transactional` directly on each repository interface
+method — a case where a compiling, seemingly-correct-looking JPA repository method
+was actually broken until exercised end to end.
+
+Frontend: difficulty score is now a colored badge (bucketed easy/medium/hard,
+reusing the reader's known/learning/new color variables) instead of plain text in
+the meta line; `createdAt` and `lastOpenedAt` are shown as relative time
+(`Intl.RelativeTimeFormat`, no new date library); a search box and a two-way sort
+toggle (styled with the same pill button class as the vocabulary page's status
+filter); a delete button per row behind a native `confirm()` dialog; pager UI
+matching the vocabulary page's Prev/Next pattern. Full visual consistency with the
+vocabulary page (`ui.md` item #6) was explicitly deferred, not attempted here.
+
+---
+
+## 15. Reader page: meaning/POS, real resume position, and reading UX — 2026-08-24
+
+Backend:
+
+- **Meaning/POS on every token** — `TextReadRepository`'s per-lemma query (already
+  the one place that loads distinct-lemma status, decision #5) now also joins
+  `word_frequency` by `lemma.dictionary_form`/`reading_form`, the exact same join
+  shape as `TextLibraryRepository`/`VocabularyBrowseRepository`. This is the *easy*
+  case of that join, unlike the vocabulary browse page: every token here already has
+  a real `lemma` row from import, so there's no "lemma might not exist yet" fallback
+  to handle.
+- **Real resume position — the option deliberately left open when `last_opened_at`
+  (§14) was scoped down to just a timestamp.** `text.last_read_position` (`V13`), a
+  `text_token.position` value. Decided, when this came up again: save only when
+  leaving the reader (not on every click, not via scroll-tracking) — same tradeoff
+  shape as §14's scope-down, chosen for the same reason: the simpler option ships
+  today, and periodic-autosave-via-scroll-position is still on the table later if
+  click-driven saving turns out to miss too much passive reading.
+- **`PUT /api/texts/{id}/position`** — ownership-scoped the same way as delete/list,
+  called once by the frontend on unmount, not per click.
+
+Frontend, on top of that data:
+
+- Meaning + part-of-speech shown in each token's popover, above the status buttons —
+  the exact same `status-picker__meaning`/`status-picker__pos` markup as the
+  vocabulary page's `VocabularyWordChip`. `partOfSpeechLabel.ts` moved from
+  `vocabulary/` to a new `shared/` folder since both pages need it now — the first
+  thing in this codebase to cross that boundary.
+- **A real, confirmed bug fixed, not just suspected**: paragraph breaks were being
+  silently flattened. Checked by actually importing multi-line text and inspecting
+  the token stream rather than guessing — the newline survives as its own
+  `is_word: false` token (Sudachi doesn't consume it), so the fix was purely
+  `white-space: pre-wrap` on `.reader-tokens`; the data was never the problem.
+- Number-key shortcuts (1–4, matching each popover's status order) while a token's
+  picker is open, scoped narrowly enough that typing elsewhere never gets
+  intercepted.
+- A small persistent color legend and a live "N known · N learning · N new" tally
+  computed client-side from the already-loaded token list (distinct lemmas, not raw
+  token counts — consistent with how the rest of the app counts vocabulary).
+- Font stack gained Japanese-specific fallbacks (`Hiragino Kaku Gothic ProN`, `Yu
+  Gothic`) ahead of the generic `sans-serif`.
+- Resuming a saved position scrolls the matching token into view once, the first
+  time a text's tokens load — not on every refetch after a status change.
+
+---
+
+## 16. Script-variant normalization for word_frequency — 2026-08-25
+
+**The problem, recurring across three separate features:** できる and 出来る are the
+same word (Sudachi's own `normalized_form` already agrees — verified directly against
+the real service before touching anything: both resolve to `出来る`, same reading,
+same part-of-speech). But `word_frequency` had two separate rows for them (rank 94 vs.
+1302), and every join from `lemma` to `word_frequency` (difficulty scoring §9d, the
+vocabulary browse page §13, the reader's meaning/POS §15) matched on
+`lemma.dictionary_form` — the *displayed* spelling, first-write-wins per decision #1,
+not the word's real identity. The same word silently got a different difficulty
+weight, meaning, or status display depending on which spelling happened to appear in
+a given text. Not a rejected idea revisited — this was flagged as a known limitation
+in §9b/§13/§15 each time it came up, deferred rather than fixed, until now.
+
+**Decided: dedupe `word_frequency` itself down to one row per real word, keyed on
+`(normalized_form, reading)` — not a query-time "pick the best of several candidates"
+pattern.** `normalized_form` (V14) was filled the same way as V8/V10 — a one-time
+local batch through the real NLP service, no live dependency. Real data turned up far
+more than できる/出来る: **498 duplicate groups, 545 redundant rows** in the actual
+top 10k — ある/在る/有る, なる/成る, いる/居る, 思う/想う, 言う/云う, ない/無い among
+them. V16 keeps the better (lower) rank per group — 9,944 rows became 9,399 — and adds
+`UNIQUE (normalized_form, reading)`, the same real-constraint discipline as `lemma`'s
+own `(normalized_form, part_of_speech)` key, which also makes the new join an indexed
+lookup instead of a sequential scan.
+
+All three consuming queries (`TextLibraryRepository`, `VocabularyBrowseRepository`,
+`TextReadRepository`) switched their join from `dictionary_form`/`reading_form` to
+`normalized_form`/`reading_form`. Verified live against the running app, not just by
+reading the diff: imported text using 出来る (the spelling whose own `word_frequency`
+row V16 deleted) — its reader token still resolved real meaning/POS via できる's
+surviving row; marking that same lemma KNOWN correctly showed できる as KNOWN on the
+vocabulary browse page. Both would have silently broken (null meaning, or the wrong
+lemma never found) under the old dictionary_form-based join now that word_frequency
+no longer has a row for every spelling.
+
+---
+
+## 17. "Other words" list on the vocabulary page — 2026-08-31
+
+**The ask:** the vocabulary browse page (§13) only ever shows words *inside* the top
+10k frequency list — asked directly what happens to a lemma from an imported text that
+falls outside it (rank > 10,000, or simply never in the source frequency data at all):
+it still gets a real `lemma` row and can still be marked KNOWN/LEARNING/etc. via the
+reader, but it was invisible on the vocabulary page, with no way to browse or triage it
+there. Decided: a second, explicitly separate list on the same page — not merged into
+the ranked grid, since these words have neither a rank nor a `word_frequency`-sourced
+meaning to show.
+
+**"Actually encountered" is per-user, not global** — sourced from `text.lemma_ids` (the
+same ownership notion the difficulty query already uses), not every `lemma` row that
+has ever existed across all users. Sorted by `lemma.created_at DESC` (most recently
+encountered first) — the closest available proxy to "when did I read this," since
+lemma rows are global and not per-user-timestamped.
+
+**Implementation:** `OtherVocabularyRepository` (JdbcTemplate, offset pagination, same
+status/POS-category filters as the ranked list) selects lemmas the user has encountered
+whose `(normalized_form, reading)` has no match in `word_frequency` — i.e., the exact
+complement of the join added in §16. `GET /api/vocabulary/other` mirrors the shape of
+`GET /api/vocabulary`. No find-or-create status endpoint needed here (unlike
+`PUT /api/vocabulary/status`): every word on this list already has a real lemma row by
+construction, so status changes go straight to the existing
+`PUT /api/lemmas/{id}/status`. Frontend: `VocabularyPage` gained a `tab` search param
+("top" | "other") switching between the existing ranked grid and a new
+`OtherVocabularyWordChip` (same chip shape, minus rank and meaning), sharing the
+status/POS filter bar and pager between both tabs.
+
+**Bug found and fixed while smoke-testing this, not introduced by it:** live-testing
+against real imported text (聞いていた, containing conjugated 居る) showed some very
+common words — た, て, いる itself — landing on the "other" list when they shouldn't
+be. Root cause, confirmed by tracing the import path: `lemma.reading_form` is
+first-write-wins per `(normalized_form, part_of_speech)`, same as `dictionary_form` —
+but unlike `dictionary_form`, its value is whatever Sudachi returned for the specific
+*surface occurrence* first encountered, not the dictionary form's own reading. For
+いる conjugated as い+た, that's い's reading (イ), not いる's own reading (イル,
+`word_frequency`'s row). §16's join keys on `(normalized_form, reading)`, so that
+mismatch silently dropped the match — a pre-existing gap in the same join used by
+§16 (`TextLibraryRepository`, `TextReadRepository`), not new to this feature, just
+newly visible because this feature's whole purpose is showing "what didn't match."
+The NLP contract has no separate "dictionary-form reading" field to fall back on
+(confirmed against the generated OpenAPI client) — Sudachi's reading is inherently
+per-surface-occurrence.
+
+**Fix, two parts, both landed 2026-08-31:**
+1. **Forward (`TextImportService.distinctWordCandidates`):** prefer an occurrence
+   where the surface text equals the dictionary form (i.e., the word appeared
+   unconjugated somewhere in the text) over one where it didn't, keeping
+   `dictionary_form` itself untouched (still first-write-wins, for the same reason
+   §16 already documents — a later occurrence can be a different script variant).
+   Zero extra NLP calls; a same-document re-prioritization of tokens already
+   returned by the one call import already makes. Residual gap: a word that is
+   *always* conjugated in every text ever imported still gets a wrong reading —
+   accepted as the boring-solution tradeoff over adding a second synchronous NLP
+   call per newly-discovered word.
+2. **Backfill (`V17__fix_lemma_reading_form_from_word_frequency.sql`):** corrects
+   existing rows from `word_frequency`'s already-correct, already-deduped (§16)
+   readings, in two tiers — exact `dictionary_form`/`term` match first (needed
+   because some kanji genuinely have multiple unrelated readings sharing one
+   `normalized_form`, e.g. 居る is both いる/イル and おる/オル — normalized_form
+   alone can't disambiguate, but the lemma's own spelling can), falling back to
+   "the normalized_form has only one reading in word_frequency anyway" for script
+   variants whose own row §16 deleted as a duplicate (出来る has no surviving
+   `term` row, but 出来る's normalized_form still resolves unambiguously).
+
+**Verified live, not just by reading the diff:** re-imported the same sentence after
+rebuilding — いる (lemma id 6) now correctly resolves as テ→イル and no longer
+appears on the "other" list.
+
+**Confirmed out of scope, found while verifying the fix, left alone:** た and て
+still appear on the "other" list after the fix, for two unrelated reasons, not a
+gap in this fix — た has no `word_frequency` row at all (missing from the jpdb
+source data as its own entry, not a join bug), and て's own `word_frequency` row
+carries `normalized_form = で` — a pre-existing inconsistency in the V15 seed data
+between how Sudachi normalizes て in isolation (offline batch) versus in a full
+sentence (live import), not something a `lemma`-side migration can correct.
+
+---
+
+## 18. Richer definitions and example sentences, decoupled from the top 10k — 2026-08-31
+
+**The ask:** §17's "other words" list had no definitions at all (word_frequency,
+where meaning lived, has no row for anything outside the top 10k by construction),
+and even the ranked list's definitions felt thin — one collapsed JMdict gloss per
+word. Both are the same underlying gap: `word_frequency.meaning` (§13) was only
+ever matched against the fixed top-10k jpdb term list, using JMdict data that
+itself covers far more ground.
+
+**Decided: two new tables, decoupled entirely from `word_frequency`'s rank-only
+job.** `dictionary_entry(normalized_form, reading, senses text[])` — one row per
+word, every JMdict sense kept, not collapsed to one — and
+`word_example(normalized_form, reading, japanese_text, english_text)` — one
+precomputed best (shortest) example sentence per word, no raw sentence corpus or
+link table kept at all. Both key on `(normalized_form, reading)`, the same
+post-§16 join key every lemma-joining query already uses, so `VocabularyBrowseRepository`,
+`OtherVocabularyRepository`, and `TextReadRepository` each pick these up with one
+more `LEFT JOIN`. `word_frequency` itself is untouched — it keeps doing the one
+job it's actually for (difficulty scoring's rank).
+
+**Sources, both static and offline, no new live dependency:** JMdict via
+scriptin/jmdict-simplified's `eng-common` release (EDRDG, CC BY-SA 4.0) — 22,636
+entries, resolved down to **20,686** `dictionary_entry` rows by tokenizing each
+entry's own headword once through the local NLP service (same bridge V15 built
+for `word_frequency.normalized_form`); entries whose headword didn't tokenize to
+exactly one word token spanning the whole string were skipped rather than guessed
+at (91.4% resolution). Tatoeba via manythings.org/anki's pre-filtered `jpn-eng`
+pairs (CC BY 2.0 FR) — 117,022 sentences, tokenized the same way, reduced to
+**16,612** `word_example` rows (one per distinct word actually covered).
+
+**A second instance of §17's exact bug, caught before shipping, not after:** the
+first pass at `word_example` keyed each sentence's words by Sudachi's per-token
+reading — the same mistake `lemma.reading_form` made. 出来る conjugated three
+different ways across three different sentences produced three different, wrong
+keys (デキル, デキ, デキレ) instead of one correct デキル, none of which would
+have matched `lemma.reading_form` after §17's fix. Caught by spot-checking 出来る
+in the generated seed file before writing the migration, not by a user report this
+time. Fixed in the seeding script itself: canonicalize every token's reading against
+`dictionary_entry`'s already-correct headword-derived reading for that
+`normalized_form` (falling back to the raw per-token reading only for a word
+outside that seed entirely), then require an unconjugated surface occurrence
+before trusting a specific reading for a genuine homograph (居る is both いる and
+おる) — the same two-tier logic §17's `V17` migration already used. Separately,
+the NLP service itself got overwhelmed under 24-way concurrency (`ConnectionResetError`
+on ~6% of the first pass) — fixed operationally by retrying the failures at lower
+concurrency (4, then 2 threads) until the batch was clean, not by silently
+accepting the gap.
+
+**Verified live, not just by reading the diff:** re-imported いざこざ ("trouble;
+quarrel," genuinely outside the top 10k) and confirmed `/api/vocabulary/other`
+returns its real multi-sense definition and a real example sentence, not the old
+"no definition available" placeholder. Re-checked の (rank 1) on the ranked list
+too — five real senses now, not word_frequency's old single collapsed gloss.
+
+**Confirmed, honest residual gap:** 瑣末 (used as this session's worked example
+for "outside the top 10k") is outside JMdict's *common* subset too, not just the
+frequency list — it still shows "no definition found." No seeding strategy over
+a finite dictionary closes this completely; re-running the offline seed against a
+newer JMdict release later would track its own updates, but a rarer word than the
+"common" cut simply won't have an entry until (or unless) it's added there.
+
+Attribution for both sources (required by CC BY-SA 4.0 and CC BY 2.0 FR, and not
+shown anywhere in the UI before this) now appears as a small footer on every
+authenticated page (`App.tsx`'s `Footer`).
+
+**Follow-up, same day:** the small absolutely-positioned popover the reader and
+both vocabulary pages shared (§13, §15) had no real room for a senses list plus
+an example sentence — reported directly as "the space is very small right now."
+Replaced with a shared `WordDetailModal` (a centered, backdrop-covered card,
+`frontend/src/shared/WordDetailModal.tsx`) used by `TokenSpan`,
+`VocabularyWordChip`, and `OtherVocabularyWordChip` alike, rather than tripling
+a modal implementation across all three. Closes on backdrop click, an explicit
+×, or Escape (new — the old popover only closed on an outside click).
+`DefinitionBlock` (senses/example markup) is unchanged; only its container
+became a modal instead of a corner-anchored popover.
+
+---
+
+## 19. Statistics page — 2026-08-31
+
+**The ask:** a page showing how many words are known/learning/etc., broken down
+by the top 10k frequency list versus everything else encountered — the two
+categories §17 already established as separate lists, now aggregated instead of
+listed.
+
+**Decided: one new endpoint, `GET /api/vocabulary/stats`, reusing the exact
+status computation the two existing list endpoints already do — grouped, not
+listed.** `VocabularyStatsRepository` runs the same `word_frequency`/lemma
+LATERAL-join CTE `VocabularyBrowseRepository` uses for the top-10k side, and the
+same `text.lemma_ids`-owned CTE `OtherVocabularyRepository` uses for the "other"
+side, but each ends in `GROUP BY status` instead of `ORDER BY ... LIMIT/OFFSET`
+— one query per category, not one row per word. Deliberately its own repository
+rather than added to either existing one: neither list needs pagination or the
+senses/example joins for a stats page that only ever shows four numbers per
+category.
+
+**Frontend:** `StatisticsPage.tsx` at `/stats`, linked from the header nav.
+Three summary cards (combined known, combined learning, total "other" words
+encountered) plus a per-category breakdown — a CSS stacked bar (reusing the
+same `--color-new/learning/known/ignored` variables the reader's status legend
+already defines) and a count list per status. No charting library — four
+segments in a row is simpler as a few styled `div`s than a dependency.
+
+**Verified live:** fresh user shows 9,399 top-10k words all NEW (word_frequency's
+real post-§16-dedup row count, not the nominal "10,000") and zero other words;
+marking の KNOWN and importing+marking a single outside-the-list word shifted
+exactly one count in each category, nothing else.
+
+---
+
+## 20. Naming and renaming imported texts — 2026-09-01
+
+**The ask:** set a title at import time, and change it afterward — import
+already accepted an optional `title` (falling back to a derived one,
+`TextImportService.deriveTitle`), but the frontend never exposed the field, and
+there was no way to rename a text once imported at all.
+
+**Import page:** a plain text input above the paste box, sent as `importText`'s
+existing optional second argument — no backend change needed here, the gap was
+only that the frontend never asked.
+
+**Renaming:** new `PUT /api/texts/{id}/title`, mirroring `PUT /api/texts/{id}/position`'s
+exact shape — same ownership-scoped 404 (a rename attempt on someone else's
+text is indistinguishable from one on a nonexistent id), same
+`@Modifying`/`@Transactional` derived-query pattern on `TextDocumentRepository`.
+Blank is rejected (`@NotBlank`) here, unlike import's optional title — a rename
+is an explicit action, not a fallback that should silently re-derive a title
+from the body.
+
+**Where to rename from:** the reader page's `<h1>` — click the title, it
+becomes an input, Enter/blur saves, Escape cancels. Chosen over adding the same
+affordance to the library list too: the list's title is already wrapped in a
+`<Link>` to open the text, so a second click target on the same row would need
+its own hit-testing; the reader already shows the title on its own line with
+nothing else competing for that click. Optimistic on the reader's own cache;
+the library list's cache is invalidated rather than patched, since the library
+page isn't guaranteed to be mounted with this exact text on its current page.
+
+---
+
+## 21. Furigana in the reader, dark mode, and non-color status signaling — 2026-09-01
+
+**Furigana (claude.md's reading-disambiguation problem, Slice 5's last open
+item):** `TokenSpan` already had the per-sentence-correct reading on every
+token (design.md §15) — it was only ever shown as an invisible hover `title`.
+Rendered as real `<ruby>`/`<rt>` now, shown only when the surface text actually
+contains a kanji (`hasKanji.ts`, a small Unicode-range check) — a kana-only
+word (かんしゃく) reading itself back above itself in the same kana would just
+be noise. `.reader-tokens`'s line-height went from 2.4 to 2.8 to give the
+ruby annotation room without clipping or overlapping the next line.
+
+**Toggleable, added same day:** a per-viewer display preference, not app
+state — a plain toggle button in the reader toolbar (reusing the existing
+`.vocabulary-filter` pill styling rather than inventing a new control), backed
+by `localStorage` rather than the backend. This isn't data that needs to sync
+across devices or survive a logout, so there's no `user_preference` table or
+API call here — just `kotanoba:show-furigana` read once on mount and written
+on toggle, wrapped in try/catch (a private window or blocked storage should
+degrade to "doesn't persist," not a broken toggle). `.reader-tokens--no-
+furigana` drops the line-height back to 2.4 when it's off, so hiding furigana
+doesn't leave the text looking oddly double-spaced.
+
+**Dark mode:** `prefers-color-scheme: dark`, no manual toggle. What made this
+more than the "close to free" swap ui.md originally scoped (written before
+this session's word-detail modal, stats page, and definition popovers existed)
+was literal `white`/hex colors scattered across a dozen components by then —
+replaced with semantic custom properties (`--color-surface`, `--color-text-
+secondary`, `--color-text-muted`, `--color-subtle`, `--color-error`) redefined
+once under the media query, rather than page background/text alone. One real
+bug caught by actually reasoning through it, not by eye: `.difficulty-badge`'s
+text color mixed each status color toward literal `black` for contrast against
+its light background tint — correct in light mode, but wrong in dark mode, where
+that same tint (still alpha-blended, now over a dark surface) reads as *dark*,
+and black text on a dark tint has no contrast at all. Fixed with a
+`--color-badge-contrast` variable (black in light mode, white in dark) instead
+of a literal.
+
+**Non-color status signal (ui.md #16):** `.token--new/learning/known/ignored`
+now differ by `border-bottom-style` (solid/dashed/none/dotted), not just hue —
+readable on a colorblind or grayscale display. `known` staying unmarked is
+deliberate, not an oversight: "no decoration" is itself a fourth
+color-independent state, and it keeps known words visually quiet while
+reading, which was already the intent. Checked the other half of ui.md #16's
+concern (status-picker buttons needing labels/keyboard reachability) and found
+it already satisfied — every status button already renders its status name as
+visible text, and nothing in the CSS suppresses the browser's default focus
+ring — so no changes were needed there.
+
+---
+
+## 22. Making Spring Modulith, actuator, and API docs real — 2026-09-01
+
+**The ask:** the project is also a resume piece specifically meant to
+demonstrate Spring Boot depth — worth periodically checking that what
+claude.md *claims* the backend does is actually true, not just declared.
+
+**Spring Modulith was a dependency, not an enforced boundary.**
+`spring-modulith-starter-core`/`-test` were in `pom.xml` ("enforces the
+module boundaries claude.md requires," the comment said) with nothing ever
+calling `ApplicationModules.verify()`. Added `ModularityTests` to make that
+literal. First run failed immediately — not with a real violation, but
+`ArchUnit`'s bundled ASM choking on Java 25's class file version ("Unsupported
+class file major version 69"). `spring-modulith.version` was 1.3.6, from
+before this project's Java 25 choice; **1.4.13** (the current 1.4.x release —
+confirmed via Maven Central's actual metadata, not a blog post, since several
+turned out to describe an unrelated 2.x line that requires Spring Boot 4) ships
+a newer ArchUnit that parses Java 25 fine. After the upgrade, `verify()`
+passed cleanly on the very first real run: no cycles between `text`/`lemma`/
+`user`/`nlp`, nothing reaching into another module's internals. Kept as a real
+test, not a one-off check — a future change that introduces a cycle now fails
+the build instead of getting caught in review, if at all.
+
+**Actuator and OpenAPI docs, both real gaps, not partial.** There was already
+a hand-rolled `GET /health` (`HealthController`) — that's Render's
+`healthCheckPath` contract and stays exactly as-is, not replaced. Actuator is
+additive: `/actuator/health`, `/actuator/info`, `/actuator/metrics`, nothing
+else — `management.endpoints.web.exposure.include` is the only thing
+separating those from `/actuator/env`/`/actuator/beans`, which can leak
+`JWT_SECRET`/DB credentials and stay off even though `SecurityConfig`
+`permitAll`s the whole `/actuator/**` path rather than gating per-endpoint.
+`/actuator/info` needed `management.info.env.enabled: true` on top of that —
+off by default in Spring Boot specifically so an app doesn't accidentally
+dump its environment into a public endpoint; safe here because it only
+surfaces the `info.app.*` block, nothing env-derived. springdoc
+(`2.8.6` — the 2.x line, not 3.x, which targets Spring Boot 4) gives a real
+`/swagger-ui/index.html` with a bearer-JWT "Authorize" button
+(`OpenApiConfig`), rather than requiring a reviewer to read controller source
+to know the API shape.
+
+**Verified live, all three:** `/actuator/health` returns `{"status":"UP"}`
+with no component detail; `/actuator/env` and `/actuator/beans` both 404 (not
+just unauthorized — genuinely not exposed); `/swagger-ui/index.html` and
+`/v3/api-docs` both load with the custom title/description, 14 discovered
+paths; a full register → authenticated-request round trip still works
+unchanged after all three additions.
+
+---
+
 ## Progress checklist
 
 Mirrors the build order in claude.md. Check off as work lands and is deployed —
@@ -782,11 +1434,12 @@ Slice 1's synchronous import path directly with no queue involved.
 
 ### Slice 3 — difficulty scoring **[revised, 2026-08-23 — no bitmaps/Redis]**
 - [ ] ~~Bitmap caching design (decision #7)~~ — rejected, see over-engineering review
-- [ ] Frequency reference: pick source, schema placement (decision #9b)
-- [ ] Seed migration for top ~8–10k frequency-ranked lemmas
-- [ ] Plain SQL difficulty-scoring query (replaces RoaringBitmap intersection)
+- [x] Frequency reference source: jpdb v2.2, top 10k, spot-checked against Sudachi (decision #9b)
+- [x] Frequency reference schema placement: separate `word_frequency` table, keyed by term/reading text, replace-only (decision #9b)
+- [x] Seed migration for top 10k frequency-ranked lemmas — `V4__word_frequency.sql` (DDL, reviewed and signed off) + `V5__SeedWordFrequency.java` (Java Flyway migration loading `seed-data/jpdb_v2.2_freq_top10k.tsv`, 9,944 rows). Verified end to end against a real Postgres: correct row count, correct encoding, correct ranks.
+- [x] Plain SQL difficulty-scoring query — `TextLibraryRepository` (design.md §9d formula: `1/ln(rank + 1)` weighting, 0.05 floor for unranked lemmas). Caught and fixed a real ambiguous-column bug (`lemma_id` alias collision) by actually running it, not just reading it.
 - [ ] ~~Redis caching of user + text bitmaps~~ — rejected, no cache layer at all
-- [ ] Library view sorted by frequency-weighted difficulty
+- [x] Library view sorted by frequency-weighted difficulty — `GET /api/texts` now runs `TextLibraryRepository.listForUser`, one query computing and sorting by score (decision #10: "moves to SQL in Slice 3"), replacing the old JPA `findByUserIdOrderByCreatedAtDesc`. Frontend shows "N% known" per text. Covered by a new integration test (`libraryListIsSortedByFrequencyWeightedDifficultyDescending`) — 5/5 tests pass against real Testcontainers Postgres + NLP.
 - [ ] Deployed
 
 ### Slice 4 — SRS review mode
@@ -796,8 +1449,8 @@ Slice 1's synchronous import path directly with no queue involved.
 - [ ] Deployed
 
 ### Slice 5 — reading disambiguation & script-variant normalization
-- [ ] Furigana display from tokenizer reading output
-- [ ] Script-variant lemma merge (`できる`/`出来る`)
+- [x] Furigana display from tokenizer reading output — §21, `<ruby>`/`<rt>` in the reader, kanji-only tokens
+- [x] Script-variant lemma merge (`できる`/`出来る`) — §16
 - [ ] Deployed
 
 ### Slice 6 — audio-text alignment

@@ -1,32 +1,35 @@
-# React + TypeScript + Vite
+# Kotanoba — frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + TypeScript + Vite, talking only to the Spring Boot backend — never
+directly to the NLP sidecar (see the root [`README.md`](../README.md) and
+[`claude.md`](../claude.md) for why). TanStack Query owns all server state;
+there's no separate client-side store.
 
-Currently, two official plugins are available:
+## Running it
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Expects the backend at `http://localhost:8080` by default (Vite's dev proxy
+makes this same-origin, so no CORS setup is needed locally — see
+`vite.config.ts`). Point it at a different backend with `VITE_API_BASE_URL`.
+
+## Structure
+
+| Directory | What's in it |
+|---|---|
+| `src/texts/` | Import, library, and reader pages |
+| `src/vocabulary/` | Vocabulary browse, "other words," and statistics pages |
+| `src/shared/` | Cross-page pieces — the word-detail modal, definition rendering, part-of-speech labels |
+| `src/api/` | Typed fetch wrappers, one file per backend resource |
+| `src/auth/` | Login and the JWT/refresh-token context |
+
+## Testing
+
+`npm run lint` (oxlint) and `npx tsc -b` are the only checks that currently
+run — there's no component/unit test suite yet. Everything on this side has
+been verified through the running app (backend integration tests plus live
+browser/curl checks) rather than isolated frontend tests; see `design.md`'s
+suggested next steps for closing that gap.
