@@ -67,6 +67,37 @@ server:
   # SERVER_PORT, else 8080.
   port: ${PORT:${SERVER_PORT:8080}}
 
+management:
+  endpoints:
+    web:
+      # Deliberately narrow: env/beans/configprops/etc. can leak real secrets
+      # (JWT_SECRET, DB credentials) and SecurityConfig permits all of
+      # /actuator/** rather than gating it per-endpoint, so the exposure list
+      # itself is the only thing keeping those two classes of endpoint apart.
+      exposure:
+        include: health, info, metrics
+  info:
+    # Off by default in Spring Boot specifically to avoid an app accidentally
+    # dumping its environment into a public /actuator/info — safe to enable
+    # here because it only ever surfaces the info.app.* block below, not
+    # arbitrary env vars.
+    env:
+      enabled: true
+  # Deliberately not "always" or "when-authorized": this app's JWT auth has no
+  # role/authority concept for Spring Security's own "authorized" check to key
+  # off, so "when-authorized" would either misbehave or just degrade to
+  # "never" anyway. "never" is explicit about the same outcome: every caller,
+  # including SecurityConfig's permitAll public access, gets only {"status":
+  # "UP"|"DOWN"}, never which downstream component failed.
+  endpoint:
+    health:
+      show-details: never
+
+info:
+  app:
+    name: Kotanoba
+    description: A LingQ-style Japanese reading trainer — see /swagger-ui/index.html for the API.
+
 logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{correlationId:-'-'}] %logger{36} - %msg%n"

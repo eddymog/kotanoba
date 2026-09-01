@@ -99,6 +99,14 @@ public class SecurityConfig {
                 .requestMatchers("/error").permitAll()
                 // Render's healthCheckPath — has no credentials to offer.
                 .requestMatchers("/health").permitAll()
+                // Actuator's exposure is already narrowed to health/info/metrics
+                // in application.yml — nothing reachable here can leak a secret,
+                // so it's fine for this to be openly browsable rather than
+                // gated behind the same JWT the actual API needs.
+                .requestMatchers("/actuator/**").permitAll()
+                // API docs — a reviewer shouldn't need a JWT just to see the
+                // contract.
+                .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
