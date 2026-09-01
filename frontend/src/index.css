@@ -4,10 +4,35 @@
   --color-known: #10b981;
   --color-ignored: #9ca3af;
   --color-bg: #ffffff;
+  --color-surface: #ffffff;
   --color-text: #1f2933;
+  --color-text-secondary: #6b7280;
+  --color-text-muted: #9ca3af;
   --color-border: #e2e8f0;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  color-scheme: light;
+  --color-subtle: #f3f4f6;
+  --color-error: #dc2626;
+  --color-badge-contrast: black;
+  font-family:
+    system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", "Segoe UI", sans-serif;
+  color-scheme: light dark;
+}
+
+/* Follows the OS/browser preference automatically — no toggle to build or
+   remember, and the values below only ever apply when nothing else already
+   set them (see the :root defaults above), so a plain light-mode viewer
+   never touches this block at all. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0f172a;
+    --color-surface: #1e293b;
+    --color-text: #e2e8f0;
+    --color-text-secondary: #94a3b8;
+    --color-text-muted: #64748b;
+    --color-border: #334155;
+    --color-subtle: #273449;
+    --color-error: #f87171;
+    --color-badge-contrast: white;
+  }
 }
 
 * {
@@ -37,7 +62,7 @@ button {
 }
 
 .error {
-  color: #dc2626;
+  color: var(--color-error);
 }
 
 /* --- header --- */
@@ -59,10 +84,36 @@ button {
   color: var(--color-text);
 }
 
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.app-nav a {
+  color: var(--color-text);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.app-footer {
+  max-width: 720px;
+  margin: 2rem auto 1rem;
+  padding: 1rem 1.5rem 0;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.app-footer a {
+  color: inherit;
+}
+
 .link-button {
   background: none;
   border: none;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   text-decoration: underline;
   padding: 0;
 }
@@ -85,7 +136,7 @@ button {
   flex-direction: column;
   gap: 0.35rem;
   font-size: 0.9rem;
-  color: #4b5563;
+  color: var(--color-text-secondary);
 }
 
 .auth-form input {
@@ -93,13 +144,15 @@ button {
   border: 1px solid var(--color-border);
   border-radius: 6px;
   font-size: 1rem;
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 
 .auth-form button {
   margin-top: 0.5rem;
   padding: 0.6rem;
   background: var(--color-text);
-  color: white;
+  color: var(--color-bg);
   border: none;
   border-radius: 6px;
 }
@@ -110,6 +163,19 @@ button {
 
 /* --- import --- */
 
+.import-page input[type="text"] {
+  display: block;
+  width: 100%;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 1rem;
+  font-family: inherit;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
 .import-page textarea {
   width: 100%;
   padding: 0.75rem;
@@ -118,13 +184,15 @@ button {
   font-size: 1rem;
   font-family: inherit;
   resize: vertical;
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 
 .import-page button {
   margin-top: 1rem;
   padding: 0.6rem 1.2rem;
   background: var(--color-text);
-  color: white;
+  color: var(--color-bg);
   border: none;
   border-radius: 6px;
 }
@@ -148,7 +216,7 @@ button {
 
 .button-link {
   background: var(--color-text);
-  color: white;
+  color: var(--color-bg);
   padding: 0.45rem 0.9rem;
   border-radius: 6px;
   text-decoration: none;
@@ -164,13 +232,21 @@ button {
   gap: 0.5rem;
 }
 
+.library-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
 .library-list a {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
+  flex: 1;
+  min-width: 0;
   text-decoration: none;
   color: var(--color-text);
 }
@@ -184,15 +260,192 @@ button {
 
 .library-list .meta {
   font-size: 0.8rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
+}
+
+.difficulty-badge {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.difficulty-badge--easy {
+  background: color-mix(in srgb, var(--color-known) 18%, transparent);
+  color: color-mix(in srgb, var(--color-known) 70%, var(--color-badge-contrast));
+}
+
+.difficulty-badge--medium {
+  background: color-mix(in srgb, var(--color-learning) 18%, transparent);
+  color: color-mix(in srgb, var(--color-learning) 70%, var(--color-badge-contrast));
+}
+
+.difficulty-badge--hard {
+  background: color-mix(in srgb, var(--color-new) 18%, transparent);
+  color: color-mix(in srgb, var(--color-new) 70%, var(--color-badge-contrast));
+}
+
+.library-delete {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.library-delete:hover {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.library-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.library-search {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.library-search input {
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.library-search button {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.85rem;
+}
+
+.library-sort {
+  display: flex;
+  gap: 0.5rem;
 }
 
 /* --- reader --- */
 
+.reader-title {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+  margin-left: -0.3rem;
+}
+
+.reader-title:hover {
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.reader-title-input {
+  display: block;
+  width: 100%;
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: inherit;
+  margin-bottom: 1.5rem;
+  padding: 0.1rem 0.3rem;
+  margin-left: -0.3rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.reader-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.status-legend {
+  display: flex;
+  gap: 0.9rem;
+}
+
+.status-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.status-legend__swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+}
+
+.status-legend__swatch--new {
+  background: var(--color-new);
+}
+
+.status-legend__swatch--learning {
+  background: var(--color-learning);
+}
+
+.status-legend__swatch--known {
+  background: var(--color-known);
+}
+
+.status-legend__swatch--ignored {
+  background: var(--color-ignored);
+}
+
+.status-picker__option kbd {
+  display: inline-block;
+  min-width: 1em;
+  padding: 0 0.3em;
+  margin-right: 0.3em;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  font-size: 0.75em;
+  font-family: inherit;
+  color: var(--color-text-muted);
+}
+
 .reader-tokens {
   font-size: 1.4rem;
-  line-height: 2.4;
+  /* Taller than a plain-text reader would need — furigana sits in the same
+     line box, and a tight line-height clips or overlaps it. Dropped back
+     down when furigana is toggled off (below), since nothing needs the
+     extra room then. */
+  line-height: 2.8;
   writing-mode: horizontal-tb;
+  white-space: pre-wrap;
+}
+
+.reader-tokens--no-furigana {
+  line-height: 2.4;
+}
+
+.reader-tokens rt {
+  font-size: 0.55em;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  user-select: none;
 }
 
 .token-wrapper {
@@ -207,12 +460,19 @@ button {
   border-bottom: 2px solid transparent;
 }
 
+/* Status is never signaled by color alone (ui.md #16) — each status below
+   also gets its own border-bottom style, so it still reads on a colorblind
+   or grayscale display. known is deliberately the one exception: no
+   underline at all is itself a distinct, color-independent fourth state
+   (a known word shouldn't visually compete for attention while reading). */
 .token--new {
+  border-bottom-style: solid;
   border-bottom-color: var(--color-new);
 }
 
 .token--learning {
   background: color-mix(in srgb, var(--color-learning) 18%, transparent);
+  border-bottom-style: dashed;
   border-bottom-color: var(--color-learning);
 }
 
@@ -222,39 +482,149 @@ button {
 
 .token--ignored {
   color: var(--color-ignored);
-  border-bottom-color: transparent;
+  border-bottom-style: dotted;
+  border-bottom-color: var(--color-ignored);
+  opacity: 0.75;
 }
 
 .token:hover {
   background: color-mix(in srgb, var(--color-text) 8%, transparent);
 }
 
-.status-picker {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 10;
+.word-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
   display: flex;
-  flex-direction: column;
-  background: white;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 1.5rem;
+}
+
+.word-modal {
+  position: relative;
+  width: min(440px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+  padding: 1.5rem 1.75rem 1.25rem;
+  font-size: 0.9rem;
+}
+
+.word-modal__close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.75rem;
+  border: none;
+  background: none;
+  font-size: 1.6rem;
+  line-height: 1;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+.word-modal__close:hover {
+  color: var(--color-text);
+}
+
+.word-modal__header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+  padding-right: 1.5rem;
+}
+
+.word-modal__term {
+  font-size: 1.7rem;
+  font-weight: 600;
+}
+
+.word-modal__reading {
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+}
+
+.word-modal__statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-top: 1rem;
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.status-picker__pos {
+  display: block;
+  margin: 0.4rem 0 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+}
+
+.status-picker__meaning {
+  display: block;
+  padding: 0.75rem 0;
+  white-space: normal;
   font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+.status-picker__meaning--missing {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.status-picker__senses {
+  display: block;
+  margin: 0;
+  padding: 0.75rem 0 0.75rem 1.4rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+.status-picker__senses li + li {
+  margin-top: 0.4rem;
+}
+
+.status-picker__example {
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.status-picker__example-ja {
+  color: var(--color-text);
+  margin-bottom: 0.25rem;
+}
+
+.status-picker__example-en {
+  color: var(--color-text-secondary);
+  font-style: italic;
 }
 
 .status-picker__option {
-  border: none;
-  background: white;
-  padding: 0.4rem 0.9rem;
-  text-align: left;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  text-align: center;
   white-space: nowrap;
   border-left: 3px solid transparent;
+  cursor: pointer;
 }
 
 .status-picker__option:hover {
-  background: #f3f4f6;
+  background: var(--color-subtle);
 }
 
 .status-picker__option--new {
@@ -271,4 +641,223 @@ button {
 
 .status-picker__option--ignored {
   border-left-color: var(--color-ignored);
+}
+
+/* --- vocabulary --- */
+
+.vocabulary-page {
+  max-width: 960px;
+}
+
+.vocabulary-header {
+  margin-bottom: 1.5rem;
+}
+
+.vocabulary-header .meta {
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.vocabulary-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.vocabulary-tabs .vocabulary-filter {
+  font-weight: 600;
+}
+
+.vocabulary-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.vocabulary-filter {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.85rem;
+}
+
+.vocabulary-filter--active {
+  background: var(--color-text);
+  color: var(--color-bg);
+  border-color: var(--color-text);
+}
+
+.vocabulary-pos-filter {
+  margin-left: auto;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.85rem;
+}
+
+.vocabulary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1rem 1rem;
+  font-size: 1.2rem;
+}
+
+.vocabulary-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.vocabulary-rank {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  min-width: 2.2em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding-top: 0.6rem;
+}
+
+.vocabulary-word-stack {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.vocabulary-romaji {
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+}
+
+.vocabulary-kana {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.vocabulary-word {
+  border-bottom-width: 2px;
+  cursor: pointer;
+}
+
+.vocabulary-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.9rem;
+}
+
+.vocabulary-pager button {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.vocabulary-pager button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- statistics --- */
+
+.stats-summary {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.stats-summary__card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.stats-summary__value {
+  font-size: 1.8rem;
+  font-weight: 600;
+}
+
+.stats-summary__label {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+
+.stats-category {
+  margin-bottom: 2rem;
+}
+
+.stats-category h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.25rem;
+}
+
+.stats-category .meta {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+  margin: 0 0 0.75rem;
+}
+
+.stats-empty {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.stats-bar {
+  display: flex;
+  height: 1rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--color-subtle);
+}
+
+.stats-bar__segment--new {
+  background: var(--color-new);
+}
+
+.stats-bar__segment--learning {
+  background: var(--color-learning);
+}
+
+.stats-bar__segment--known {
+  background: var(--color-known);
+}
+
+.stats-bar__segment--ignored {
+  background: var(--color-ignored);
+}
+
+.stats-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.25rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.stats-breakdown li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.stats-breakdown__total {
+  color: var(--color-text-secondary);
 }

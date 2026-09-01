@@ -62,6 +62,20 @@ public class TextDocument {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    // Null until the text is first opened (design.md §14: recency signal
+    // only, not exact resume position). Set by TextDocumentRepository's
+    // touchLastOpenedAt, not JPA save() — the read path (GET /{id}) is the
+    // only writer, and it doesn't otherwise load this entity for mutation.
+    @Column(name = "last_opened_at")
+    private Instant lastOpenedAt;
+
+    // Null until the reader saves one — a text_token.position value, not a
+    // char offset (design.md §15). Set only when leaving the reader, not on
+    // every click, same "recency signal, don't over-write" reasoning as
+    // lastOpenedAt but for exact position instead of just a timestamp.
+    @Column(name = "last_read_position")
+    private Integer lastReadPosition;
+
     protected TextDocument() {
         // JPA
     }
@@ -105,5 +119,13 @@ public class TextDocument {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public Instant getLastOpenedAt() {
+        return lastOpenedAt;
+    }
+
+    public Integer getLastReadPosition() {
+        return lastReadPosition;
     }
 }

@@ -9,6 +9,7 @@ import com.kotanoba.nlp.TokenizeResult;
 import com.kotanoba.nlp.TokenizedWord;
 import com.kotanoba.user.CurrentUser;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -114,14 +115,33 @@ public class TextImportService {
         // that hits the same conflict target twice within one statement — so
         // duplicates must be collapsed before they reach LemmaBulkUpsertRepository.
         Map<LemmaKey, LemmaCandidate> byKey = new LinkedHashMap<>();
+        // Whether the reading currently stored for a key came from an
+        // occurrence where the word appeared in its own dictionary form
+        // (unconjugated) — design.md §17. A conjugated occurrence's reading
+        // (いる conjugated as い+た gives イ, not いる's own イル) is only a
+        // placeholder until a better occurrence is seen; dictionaryForm
+        // itself stays first-write-wins, per LemmaBulkUpsertRepository's
+        // javadoc, since Sudachi can report a different spelling variant's
+        // dictionary_form across occurrences.
+        Map<LemmaKey, Boolean> readingIsFromDictionaryForm = new HashMap<>();
         for (TokenizedWord token : tokens) {
             if (!token.isWord()) {
                 continue;
             }
             LemmaKey key = new LemmaKey(token.normalizedForm(), token.partOfSpeech());
-            byKey.putIfAbsent(key, new LemmaCandidate(
-                token.normalizedForm(), token.dictionaryForm(), token.reading(), token.partOfSpeech()
-            ));
+            boolean isUnconjugated = token.surface().equals(token.dictionaryForm());
+            LemmaCandidate existing = byKey.get(key);
+            if (existing == null) {
+                byKey.put(key, new LemmaCandidate(
+                    token.normalizedForm(), token.dictionaryForm(), token.reading(), token.partOfSpeech()
+                ));
+                readingIsFromDictionaryForm.put(key, isUnconjugated);
+            } else if (isUnconjugated && !readingIsFromDictionaryForm.get(key)) {
+                byKey.put(key, new LemmaCandidate(
+                    existing.normalizedForm(), existing.dictionaryForm(), token.reading(), existing.partOfSpeech()
+                ));
+                readingIsFromDictionaryForm.put(key, true);
+            }
         }
         return byKey;
     }

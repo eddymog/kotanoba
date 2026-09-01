@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { importText } from "../api/texts";
 
 export function ImportPage() {
+  const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -13,7 +14,7 @@ export function ImportPage() {
   // submit button + "Tokenizing..." label is the entire loading story for
   // now, matching the thin-slice scope.
   const mutation = useMutation({
-    mutationFn: () => importText(text),
+    mutationFn: () => importText(text, title.trim() || undefined),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["texts"] });
       navigate(`/texts/${created.id}`);
@@ -31,6 +32,12 @@ export function ImportPage() {
     <main className="import-page">
       <h1>Import a text</h1>
       <form onSubmit={handleSubmit}>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Title (optional — taken from the text if left blank)"
+        />
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}

@@ -6,6 +6,8 @@ import { LoginPage } from "./auth/LoginPage";
 import { ImportPage } from "./texts/ImportPage";
 import { LibraryPage } from "./texts/LibraryPage";
 import { ReaderPage } from "./texts/ReaderPage";
+import { StatisticsPage } from "./vocabulary/StatisticsPage";
+import { VocabularyPage } from "./vocabulary/VocabularyPage";
 
 const queryClient = new QueryClient();
 
@@ -21,10 +23,29 @@ function Header() {
       <Link to="/" className="app-title">
         Kotanoba
       </Link>
-      <button type="button" className="link-button" onClick={logout}>
-        Log out
-      </button>
+      <nav className="app-nav">
+        <Link to="/vocabulary">Vocabulary</Link>
+        <Link to="/stats">Statistics</Link>
+        <button type="button" className="link-button" onClick={logout}>
+          Log out
+        </button>
+      </nav>
     </header>
+  );
+}
+
+// Definitions (design.md §13/§18) come from JMdict (EDRDG, CC BY-SA 4.0) and
+// example sentences from Tatoeba (via manythings.org/anki, CC BY 2.0 FR) —
+// both licenses require attribution, and neither was shown anywhere before.
+function Footer() {
+  return (
+    <footer className="app-footer">
+      Definitions from JMdict/EDRDG (CC BY-SA 4.0). Example sentences from the{" "}
+      <a href="https://tatoeba.org" target="_blank" rel="noreferrer">
+        Tatoeba Project
+      </a>{" "}
+      (CC BY 2.0 FR).
+    </footer>
   );
 }
 
@@ -42,7 +63,10 @@ function AppRoutes() {
               <Route path="/" element={<LibraryPage />} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/texts/:id" element={<ReaderPage />} />
+              <Route path="/vocabulary" element={<VocabularyPage />} />
+              <Route path="/stats" element={<StatisticsPage />} />
             </Routes>
+            <Footer />
           </RequireAuth>
         }
       />
